@@ -1,0 +1,17 @@
+{
+  "dataset_root": "datasets/demo_v2_50demos_fixed",
+  "ckpt_dir": "./ckpt/exp_E8_data_50_fixed",
+  "xml_path": "./mode/demo_scene.xml",
+  "video_path": "",
+  "record_video": true,
+  "deploy_seed": 0,
+  "max_steps": 120,
+  "executed_steps": 0,
+  "success": false,
+  "failure_mode": "native_crash",
+  "status": "command_failed",
+  "return_code": -11,
+  "chunk_size": 50,
+  "n_action_steps": 1,
+  "temporal_ensemble_coeff": 0.9
+}

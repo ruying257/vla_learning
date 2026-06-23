@@ -1,0 +1,15 @@
+{
+  "dataset_root": "datasets/demo_v5_30demos_random",
+  "ckpt_dir": "./ckpt/v5",
+  "xml_path": "./mode/demo_scene.xml",
+  "video_path": "/mnt/d/Desktop/vla_learning/experiments/act_tuning/videos/E10/deployment_20260606_172034.mp4",
+  "record_video": true,
+  "deploy_seed": 0,
+  "max_steps": 120,
+  "executed_steps": 120,
+  "success": false,
+  "chunk_size": 50,
+  "n_action_steps": 1,
+  "temporal_ensemble_coeff": 0.7,
+  "device": "cuda"
+}

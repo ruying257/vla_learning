@@ -1,0 +1,62 @@
+# IDE 配置
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 数据集和演示数据
+datasets/
+demo_data/
+demo_data*/
+videos/
+wandb/
+
+# 模型检查点
+ckpt/
+checkpoint/
+checkpoints/
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# 临时文件
+*.tmp
+*.bak
+*.log
+
+# for myself
+ACT调参.md
+AGENTS.md
+MUJOCO_LOG.TXT
+README_ACT_TUNING.md
+README_ACT_WSL.md

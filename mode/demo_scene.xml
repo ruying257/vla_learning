@@ -1,0 +1,37 @@
+<mujoco model="ur10e scene">
+  <include file="ur10e_with_2f85_d435i.xml"/> # 包含机械臂的模型文件
+  <include file="./tabletop/object/object_table.xml" /> # 包含桌面的模型文件
+  <include file="./plate_11/model_new.xml"/> # 包含盘的模型文件
+  <include file="./mug_5/model_new.xml"/> # 包含杯的模型文件
+
+  # 配置仿真的统计信息参数
+  <statistic center="0.4 0 0.4" extent="1"/>
+
+  # 视觉属性的根节点，所有场景视觉效果（光照、雾、视角）都嵌套在此标签内
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.1 0.1 0.1" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    #配置全局默认视角参数
+    <global azimuth="120" elevation="-20"/>
+  </visual>
+
+ # 资源定义根节点，声明仿真中复用的纹理、材质、网格等资源
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+      markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+  </asset>
+
+  # 物理世界的根节点，所有物理实体（光源、地面、机械臂）都在此定义
+  # 作用就是 “划定物理世界的边界”：标签外的内容如 visual>、asset是配置/资源，标签内的内容是 “真正存在于仿真世界里的实体”
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
+  # 世界“坐标”
+    <geom type="sphere" size="0.02" pos="0 0 0" rgba="1 1 1 1" contype="0" conaffinity="0" mass="0" group="1"/>
+    <geom type="cylinder" size="0.005 0.15" pos="0.15 0 0.8" euler="0 1.5708 0" rgba="1 0 0 1" contype="0" conaffinity="0" mass="0" group="1"/>
+    <geom type="cylinder" size="0.005 0.15" pos="0 0.15 0.8" euler="-1.5708 0 0" rgba="0 1 0 1" contype="0" conaffinity="0" mass="0" group="1"/>
+    <geom type="cylinder" size="0.005 0.15" pos="0 0 0.97" euler="0 0 0" rgba="0 0 1 1" contype="0" conaffinity="0" mass="0" group="1"/>
+  </worldbody>
+</mujoco>

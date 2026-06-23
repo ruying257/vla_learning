@@ -1,0 +1,15 @@
+{
+  "dataset_root": "datasets/demo_v5_30demos_random",
+  "ckpt_dir": "./ckpt/exp_E6_lr_2e-4",
+  "training_steps": 6000,
+  "log_freq": 600,
+  "batch_size": 4,
+  "num_workers": 0,
+  "chunk_size": 50,
+  "n_action_steps": 1,
+  "learning_rate": 0.0002,
+  "device": "cuda",
+  "final_loss": 0.1951698213815689,
+  "mean_action_error": 0.1852918118238449,
+  "total_training_time_sec": 940.3475484848022
+}

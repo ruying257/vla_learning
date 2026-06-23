@@ -1,0 +1,18 @@
+{
+  "dataset_root": "datasets/demo_v5_30demos_random",
+  "ckpt_dir": "./ckpt/exp_E4_lr_5e-5",
+  "xml_path": "./mode/demo_scene.xml",
+  "video_path": "/mnt/d/Desktop/vla_learning/experiments/act_tuning/videos/E4/deployment_20260606_221552.mp4",
+  "record_video": true,
+  "deploy_seed": 1,
+  "max_steps": 120,
+  "executed_steps": 120,
+  "success": false,
+  "failure_mode": "max_steps",
+  "status": "ok",
+  "error": "",
+  "chunk_size": 50,
+  "n_action_steps": 1,
+  "temporal_ensemble_coeff": 0.9,
+  "device": "cuda"
+}
