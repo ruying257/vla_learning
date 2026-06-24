@@ -61,7 +61,6 @@ def supports_deploy_no_ensemble():
     parses_none_literal = ('"none"' in deploy_text or "'none'" in deploy_text) and "lower()" in deploy_text
     return has_temporal_env and parses_none_literal
 
-
 def supports_adaptive_temporal_ensemble():
     """检查 deploy 脚本是否支持自适应 temporal ensemble。"""
     deploy_text = (ROOT / DEPLOY_SCRIPT).read_text(encoding="utf-8", errors="ignore")
@@ -69,7 +68,9 @@ def supports_adaptive_temporal_ensemble():
 
 
 
+
 def supports_stage_resampling():
+    """检查 train.py 是否支持阶段采样。"""
     """检查 train.py 是否支持阶段采样。"""
     train_text = (ROOT / "3.train.py").read_text(encoding="utf-8", errors="ignore")
     return "ACT_STAGE_RESAMPLING" in train_text
@@ -183,6 +184,11 @@ def experiment_matrix(args):
 
 
 def select_experiments(args):
+    """
+    根据命令行参数选择实验
+    示例：
+    python run_cac_paper_experiments.py --exp CATE_E0_no_ensemble
+    """
     """
     根据命令行参数选择实验
     示例：
