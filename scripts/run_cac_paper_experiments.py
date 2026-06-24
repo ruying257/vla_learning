@@ -1,4 +1,6 @@
-﻿import argparse
+﻿# 运行CAC论文实验脚本
+
+import argparse
 import csv
 import json
 import os
@@ -14,7 +16,9 @@ RESULTS_PATH = EXP_DIR / "results.csv"
 DEFAULT_BASELINE_DATASET = "datasets/demo_v5_30demos_random"
 DEFAULT_FAILURE_GUIDED_DATASET = "datasets/demo_v6_failure_guided"
 DEFAULT_EXTRA_RANDOM_DATASET = "datasets/demo_v6_extra_random"
-DEFAULT_CATE_CKPT = "./ckpt/act_y"
+DEFAULT_CATE_CKPT = "./ckpt/v5"
+DEFAULT_FORCE_RELEASE_STREAK = 3
+DEPLOY_SCRIPT = "4.deploy_test.py"
 
 RESULT_FIELDS = [
     "exp_id",
@@ -29,8 +33,10 @@ RESULT_FIELDS = [
     "final_loss",
     "success_rate",
     "placement_success_rate",
+    "release_success_rate",
     "strict_success_rate",
     "avg_steps",
+    "avg_release_steps",
     "avg_success_steps",
     "action_smoothness_mean",
     "prediction_inconsistency_mean",
@@ -49,18 +55,22 @@ def clean_proxy(env):
 
 
 def supports_deploy_no_ensemble():
-    deploy_text = (ROOT / "4.deploy.py").read_text(encoding="utf-8", errors="ignore").lower()
+    """检查 deploy 脚本是否支持无 temporal ensemble。"""
+    deploy_text = (ROOT / DEPLOY_SCRIPT).read_text(encoding="utf-8", errors="ignore").lower()
     has_temporal_env = "act_temporal_ensemble_coeff" in deploy_text
     parses_none_literal = ('"none"' in deploy_text or "'none'" in deploy_text) and "lower()" in deploy_text
     return has_temporal_env and parses_none_literal
 
 
 def supports_adaptive_temporal_ensemble():
-    deploy_text = (ROOT / "4.deploy.py").read_text(encoding="utf-8", errors="ignore")
+    """检查 deploy 脚本是否支持自适应 temporal ensemble。"""
+    deploy_text = (ROOT / DEPLOY_SCRIPT).read_text(encoding="utf-8", errors="ignore")
     return "ACT_ADAPTIVE_TE" in deploy_text
 
 
+
 def supports_stage_resampling():
+    """检查 train.py 是否支持阶段采样。"""
     train_text = (ROOT / "3.train.py").read_text(encoding="utf-8", errors="ignore")
     return "ACT_STAGE_RESAMPLING" in train_text
 
@@ -173,6 +183,11 @@ def experiment_matrix(args):
 
 
 def select_experiments(args):
+    """
+    根据命令行参数选择实验
+    示例：
+    python run_cac_paper_experiments.py --exp CATE_E0_no_ensemble
+    """
     matrix = experiment_matrix(args)
     if args.exp:
         wanted = set(args.exp)
@@ -223,10 +238,10 @@ def ensure_supported(exp, phases, dry_run):
         return
     if "deploy" in phases and exp.get("requires_no_ensemble_support") and not supports_deploy_no_ensemble():
         raise SystemExit(
-            f"{exp['id']} needs 4.deploy.py to support ACT_TEMPORAL_ENSEMBLE_COEFF=none before formal deploy."
+            f"{exp['id']} needs {DEPLOY_SCRIPT} to support ACT_TEMPORAL_ENSEMBLE_COEFF=none before formal deploy."
         )
     if "deploy" in phases and exp.get("requires_adaptive_support") and not supports_adaptive_temporal_ensemble():
-        raise SystemExit(f"{exp['id']} needs ACT_ADAPTIVE_TE support in 4.deploy.py before formal deploy.")
+        raise SystemExit(f"{exp['id']} needs ACT_ADAPTIVE_TE support in {DEPLOY_SCRIPT} before formal deploy.")
     if "train" in phases and exp.get("requires_stage_resampling_support") and not supports_stage_resampling():
         raise SystemExit(f"{exp['id']} needs ACT_STAGE_RESAMPLING support in 3.train.py before formal train.")
 
@@ -291,6 +306,8 @@ def deploy_env(base_env, exp, args, seed):
             "ACT_VIDEO_DIR": str(EXP_DIR / "videos" / exp["id"]),
             "ACT_RECORD_VIDEO": "1",
             "ACT_DEPLOY_METRICS_PATH": str(EXP_DIR / "metrics" / f"{exp['id']}_deploy_seed{seed}.json"),
+            "ACT_FORCE_RELEASE_ON_PLACEMENT": "1",
+            "ACT_FORCE_RELEASE_STREAK": str(DEFAULT_FORCE_RELEASE_STREAK),
         }
     )
     if exp.get("adaptive_te"):
@@ -315,6 +332,8 @@ def print_env_delta(env):
         "ACT_TRAINING_STEPS",
         "ACT_DEPLOY_SEED",
         "ACT_DEPLOY_METRICS_PATH",
+        "ACT_FORCE_RELEASE_ON_PLACEMENT",
+        "ACT_FORCE_RELEASE_STREAK",
     ]
     for key in keys:
         if key in env:
@@ -365,6 +384,10 @@ def mean_metric(payloads, key, digits=4):
     return f"{sum(values) / len(values):.{digits}f}"
 
 
+def is_release_success(payload):
+    return bool(payload.get("placement_success", False)) and payload.get("final_gripper_qpos") is not None and payload.get("final_gripper_qpos", 1.0) < 0.1
+
+
 def default_args_for_order():
     class Defaults:
         ckpt_dir = DEFAULT_CATE_CKPT
@@ -380,10 +403,15 @@ def summarize_experiment(exp, args):
     deploy_payloads = [read_json(path) for path in deploy_paths]
     deploy_payloads = [payload for payload in deploy_payloads if payload]
 
-    success_payloads = [
+    release_success_payloads = [
         payload
         for payload in deploy_payloads
-        if payload.get("strict_success", payload.get("success", False)) or payload.get("placement_success", False)
+        if is_release_success(payload)
+    ]
+    strict_success_payloads = [
+        payload
+        for payload in deploy_payloads
+        if payload.get("strict_success", payload.get("success", False))
     ]
     failure_modes = sorted({payload.get("failure_mode", "") for payload in deploy_payloads if payload.get("failure_mode")})
     video_path = ""
@@ -405,9 +433,11 @@ def summarize_experiment(exp, args):
         "final_loss": "" if not train_metrics else f"{train_metrics['final_loss']:.4f}",
         "success_rate": rate(deploy_payloads, "success"),
         "placement_success_rate": rate(deploy_payloads, "placement_success"),
+        "release_success_rate": "" if not deploy_payloads else f"{sum(is_release_success(payload) for payload in deploy_payloads) / len(deploy_payloads):.2f}",
         "strict_success_rate": rate(deploy_payloads, "strict_success"),
         "avg_steps": mean_metric(deploy_payloads, "executed_steps", digits=1),
-        "avg_success_steps": mean_metric(success_payloads, "executed_steps", digits=1),
+        "avg_release_steps": mean_metric(release_success_payloads, "executed_steps", digits=1),
+        "avg_success_steps": mean_metric(strict_success_payloads, "executed_steps", digits=1),
         "action_smoothness_mean": mean_metric(deploy_payloads, "action_smoothness_mean"),
         "prediction_inconsistency_mean": mean_metric(deploy_payloads, "prediction_inconsistency_mean"),
         "final_mug_plate_xy_dist": mean_metric(deploy_payloads, "final_mug_plate_xy_dist"),
@@ -463,7 +493,7 @@ def run_one(exp, args):
             if metrics_path.exists() and not args.dry_run:
                 metrics_path.unlink()
             code = run_command(
-                python_cmd + ["4.deploy.py"],
+                python_cmd + [DEPLOY_SCRIPT],
                 env,
                 EXP_DIR / "logs" / f"{exp['id']}_deploy_seed{seed}.log",
                 args.dry_run,
@@ -505,7 +535,7 @@ def parse_args():
     parser.add_argument("--log-freq", type=int, default=500)
     parser.add_argument("--deploy-trials", type=int, default=5)
     parser.add_argument("--deploy-seed-start", type=int, default=0)
-    parser.add_argument("--deploy-max-steps", type=int, default=300)
+    parser.add_argument("--deploy-max-steps", type=int, default=400)
     parser.add_argument("--deploy-cooldown", type=float, default=2.0)
     parser.add_argument("--adaptive-alpha-min", type=float, default=0.5)
     parser.add_argument("--adaptive-alpha-max", type=float, default=0.95)
@@ -540,4 +570,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

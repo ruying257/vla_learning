@@ -298,7 +298,7 @@ class SimpleEnv:
         gripper = self.env.get_qpos_joint('right_driver_joint')
         return float(np.asarray(gripper).reshape(-1)[0])
 
-    def get_task_metrics(self, placement_xy_threshold=0.1):
+    def get_task_metrics(self, placement_xy_threshold=0.1, placement_z_threshold=0.1):
         """返回杯盘距离、夹爪状态和双口径成功信号，用于论文实验评估。"""
         p_mug = self.env.get_p_body('body_obj_mug_5')
         p_plate = self.env.get_p_body('body_obj_plate_11')
@@ -306,10 +306,13 @@ class SimpleEnv:
         gripper_qpos = self.get_gripper_qpos()
         mug_plate_xy_dist = float(np.linalg.norm(p_mug[:2] - p_plate[:2]))
         mug_plate_z_gap = float(abs(p_mug[2] - p_plate[2]))
-        placement_success = mug_plate_xy_dist < placement_xy_threshold
+        # placement_success 只描述几何放置到位，不包含松爪与抬升约束。
+        placement_success = (
+            mug_plate_xy_dist < placement_xy_threshold
+            and mug_plate_z_gap < placement_z_threshold
+        )
         strict_success = (
             placement_success
-            and mug_plate_z_gap < 0.6
             and gripper_qpos < 0.1
             and ee_z > 0.9
         )
@@ -318,15 +321,17 @@ class SimpleEnv:
             "plate_position": p_plate.astype(float).tolist(),
             "mug_plate_xy_dist": mug_plate_xy_dist,
             "mug_plate_z_gap": mug_plate_z_gap,
+            "placement_xy_threshold": placement_xy_threshold,
+            "placement_z_threshold": placement_z_threshold,
             "final_gripper_qpos": gripper_qpos,
             "ee_z": ee_z,
             "placement_success": bool(placement_success),
             "strict_success": bool(strict_success),
         }
 
-    def check_placement_success(self, placement_xy_threshold=0.1):
+    def check_placement_success(self, placement_xy_threshold=0.1, placement_z_threshold=0.1):
         """只判断杯子是否到达盘子附近，不要求夹爪释放。"""
-        return self.get_task_metrics(placement_xy_threshold)["placement_success"]
+        return self.get_task_metrics(placement_xy_threshold, placement_z_threshold)["placement_success"]
 
     # 判断任务是否成功
     def check_success(self):

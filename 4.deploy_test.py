@@ -30,7 +30,9 @@ N_ACTION_STEPS = int(os.environ.get("ACT_N_ACTION_STEPS", "1"))
 TEMPORAL_ENSEMBLE_COEFF = float(os.environ.get("ACT_TEMPORAL_ENSEMBLE_COEFF", "0.9"))
 METRICS_PATH = os.environ.get("ACT_DEPLOY_METRICS_PATH", "exp_log")
 PLACEMENT_XY_THRESHOLD = float(os.environ.get("ACT_PLACEMENT_XY_THRESHOLD", "0.1"))
-PLACEMENT_Z_THRESHOLD = float(os.environ.get("ACT_PLACEMENT_Z_THRESHOLD", "0.1"))
+PLACEMENT_Z_THRESHOLD = float(os.environ.get("ACT_PLACEMENT_Z_THRESHOLD", "0.08"))
+FORCE_RELEASE_ON_PLACEMENT = os.environ.get("ACT_FORCE_RELEASE_ON_PLACEMENT", "1") == "1"
+FORCE_RELEASE_STREAK = int(os.environ.get("ACT_FORCE_RELEASE_STREAK", "3"))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -126,7 +128,16 @@ def select_action_and_measure(policy, data, step, chunk_history):
         return action, prediction_inconsistency
 
 
-def build_eval_metrics(env, initial_task_metrics, action_deltas, prediction_inconsistencies, trajectory_metrics):
+def build_eval_metrics(
+    env,
+    initial_task_metrics,
+    action_deltas,
+    prediction_inconsistencies,
+    trajectory_metrics,
+    release_latched,
+    release_trigger_step,
+    max_placement_success_streak,
+):
     """汇总单次部署的论文评价指标。"""
     final_task_metrics = (
         env.get_task_metrics(PLACEMENT_XY_THRESHOLD, PLACEMENT_Z_THRESHOLD) if env is not None else {}
@@ -150,8 +161,27 @@ def build_eval_metrics(env, initial_task_metrics, action_deltas, prediction_inco
         "min_mug_plate_z_gap": min(z_gaps) if z_gaps else final_task_metrics.get("mug_plate_z_gap"),
         "final_gripper_qpos": final_task_metrics.get("final_gripper_qpos"),
         "final_ee_z": final_task_metrics.get("ee_z"),
+        "force_release_on_placement": FORCE_RELEASE_ON_PLACEMENT,
+        "force_release_streak": FORCE_RELEASE_STREAK,
+        "release_latched": bool(release_latched),
+        "release_trigger_step": release_trigger_step,
+        "placement_success_streak_max": max_placement_success_streak,
     }
     return metrics
+
+
+def maybe_force_release(action, placement_success_streak, release_latched):
+    """达到连续命中阈值后锁存开爪，只覆盖夹爪通道。"""
+    if not FORCE_RELEASE_ON_PLACEMENT:
+        return action, release_latched, False
+
+    should_latch = release_latched or placement_success_streak >= FORCE_RELEASE_STREAK
+    if not should_latch:
+        return action, False, False
+
+    forced_action = action.copy()
+    forced_action[-1] = 0.0
+    return forced_action, True, True
 
 
 def write_deploy_metrics(metrics_path, video_path, step, success, failure_mode, eval_metrics, status="ok", error=""):
@@ -221,6 +251,10 @@ def main():
     trajectory_metrics = []
     chunk_history = []
     prev_action = None
+    placement_success_streak = 0
+    max_placement_success_streak = 0
+    release_latched = False
+    release_trigger_step = None
 
     try:
         policy = build_policy()
@@ -236,6 +270,11 @@ def main():
 
             task_metrics = env.get_task_metrics(PLACEMENT_XY_THRESHOLD, PLACEMENT_Z_THRESHOLD)
             trajectory_metrics.append(task_metrics)
+            if task_metrics["placement_success"]:
+                placement_success_streak += 1
+            else:
+                placement_success_streak = 0
+            max_placement_success_streak = max(max_placement_success_streak, placement_success_streak)
 
             if task_metrics["strict_success"]:
                 print("Success")
@@ -263,6 +302,13 @@ def main():
                 prediction_inconsistencies.append(prediction_inconsistency)
             if prev_action is not None:
                 action_deltas.append(float(np.linalg.norm(action - prev_action)))
+            action, release_latched, release_forced_this_step = maybe_force_release(
+                action,
+                placement_success_streak,
+                release_latched,
+            )
+            if release_forced_this_step and release_trigger_step is None:
+                release_trigger_step = step
             prev_action = action.copy()
 
             env.step(action)
@@ -298,6 +344,9 @@ def main():
             action_deltas,
             prediction_inconsistencies,
             trajectory_metrics,
+            release_latched,
+            release_trigger_step,
+            max_placement_success_streak,
         )
         success = success or bool(eval_metrics.get("strict_success", False))
         failure_mode = infer_failure_mode(success, eval_metrics, failure_mode)
