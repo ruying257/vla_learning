@@ -14,7 +14,7 @@ RESULTS_PATH = EXP_DIR / "results.csv"
 DEFAULT_BASELINE_DATASET = "datasets/demo_v5_30demos_random"
 DEFAULT_FAILURE_GUIDED_DATASET = "datasets/demo_v6_failure_guided"
 DEFAULT_EXTRA_RANDOM_DATASET = "datasets/demo_v6_extra_random"
-DEFAULT_CATE_CKPT = "./ckpt/act_y"
+DEFAULT_CATE_CKPT = "./ckpt/v5"
 
 RESULT_FIELDS = [
     "exp_id",
@@ -49,18 +49,21 @@ def clean_proxy(env):
 
 
 def supports_deploy_no_ensemble():
+    """检查 deploy.py 是否支持无 temporal ensemble。"""
     deploy_text = (ROOT / "4.deploy.py").read_text(encoding="utf-8", errors="ignore").lower()
     has_temporal_env = "act_temporal_ensemble_coeff" in deploy_text
     parses_none_literal = ('"none"' in deploy_text or "'none'" in deploy_text) and "lower()" in deploy_text
     return has_temporal_env and parses_none_literal
 
-
 def supports_adaptive_temporal_ensemble():
+    """检查 deploy.py 是否支持自适应 temporal ensemble。"""
     deploy_text = (ROOT / "4.deploy.py").read_text(encoding="utf-8", errors="ignore")
     return "ACT_ADAPTIVE_TE" in deploy_text
 
 
+
 def supports_stage_resampling():
+    """检查 train.py 是否支持阶段采样。"""
     train_text = (ROOT / "3.train.py").read_text(encoding="utf-8", errors="ignore")
     return "ACT_STAGE_RESAMPLING" in train_text
 
@@ -173,6 +176,11 @@ def experiment_matrix(args):
 
 
 def select_experiments(args):
+    """
+    根据命令行参数选择实验
+    示例：
+    python run_cac_paper_experiments.py --exp CATE_E0_no_ensemble
+    """
     matrix = experiment_matrix(args)
     if args.exp:
         wanted = set(args.exp)
