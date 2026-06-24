@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import csv
 import json
 import os
@@ -22,7 +22,14 @@ RESULT_FIELDS = [
     "mean_action_error",
     "final_loss",
     "success_rate",
+    "placement_success_rate",
+    "strict_success_rate",
     "avg_steps",
+    "avg_success_steps",
+    "action_smoothness_mean",
+    "prediction_inconsistency_mean",
+    "final_mug_plate_xy_dist",
+    "min_mug_plate_xy_dist",
     "failure_mode",
     "video_path",
     "notes",
@@ -167,12 +174,18 @@ def write_failed_deploy_metrics(env, return_code):
         "max_steps": int(env["ACT_DEPLOY_MAX_STEPS"]),
         "executed_steps": 0,
         "success": False,
+        "strict_success": False,
+        "placement_success": False,
         "failure_mode": failure_mode,
         "status": "command_failed",
         "return_code": return_code,
         "chunk_size": int(env["ACT_CHUNK_SIZE"]),
         "n_action_steps": int(env["ACT_N_ACTION_STEPS"]),
         "temporal_ensemble_coeff": float(env["ACT_TEMPORAL_ENSEMBLE_COEFF"]),
+        "action_smoothness_mean": None,
+        "prediction_inconsistency_mean": None,
+        "final_mug_plate_xy_dist": None,
+        "min_mug_plate_xy_dist": None,
     }
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     with open(metrics_path, "w", encoding="utf-8") as f:
@@ -190,7 +203,38 @@ def summarize_result(config, exp):
 
     successes = [payload["success"] for payload in deploy_payloads]
     success_rate = "" if not successes else f"{sum(successes) / len(successes):.2f}"
+    placement_successes = [payload.get("placement_success", payload.get("success", False)) for payload in deploy_payloads]
+    strict_successes = [payload.get("strict_success", payload.get("success", False)) for payload in deploy_payloads]
+    placement_success_rate = "" if not placement_successes else f"{sum(placement_successes) / len(placement_successes):.2f}"
+    strict_success_rate = "" if not strict_successes else f"{sum(strict_successes) / len(strict_successes):.2f}"
     avg_steps = "" if not deploy_payloads else f"{sum(p['executed_steps'] for p in deploy_payloads) / len(deploy_payloads):.1f}"
+    success_step_payloads = [
+        payload
+        for payload in deploy_payloads
+        if payload.get("strict_success", payload.get("success", False))
+        or payload.get("placement_success", False)
+    ]
+    avg_success_steps = "" if not success_step_payloads else f"{sum(p['executed_steps'] for p in success_step_payloads) / len(success_step_payloads):.1f}"
+    action_smoothness_values = [
+        payload["action_smoothness_mean"]
+        for payload in deploy_payloads
+        if payload.get("action_smoothness_mean") is not None
+    ]
+    prediction_inconsistency_values = [
+        payload["prediction_inconsistency_mean"]
+        for payload in deploy_payloads
+        if payload.get("prediction_inconsistency_mean") is not None
+    ]
+    final_xy_values = [
+        payload["final_mug_plate_xy_dist"]
+        for payload in deploy_payloads
+        if payload.get("final_mug_plate_xy_dist") is not None
+    ]
+    min_xy_values = [
+        payload["min_mug_plate_xy_dist"]
+        for payload in deploy_payloads
+        if payload.get("min_mug_plate_xy_dist") is not None
+    ]
     video_path = ""
     for payload in deploy_payloads:
         if payload.get("video_path"):
@@ -223,7 +267,14 @@ def summarize_result(config, exp):
         "mean_action_error": "" if not train_metrics else f"{train_metrics['mean_action_error']:.4f}",
         "final_loss": "" if not train_metrics else f"{train_metrics['final_loss']:.4f}",
         "success_rate": success_rate,
+        "placement_success_rate": placement_success_rate,
+        "strict_success_rate": strict_success_rate,
         "avg_steps": avg_steps,
+        "avg_success_steps": avg_success_steps,
+        "action_smoothness_mean": "" if not action_smoothness_values else f"{sum(action_smoothness_values) / len(action_smoothness_values):.4f}",
+        "prediction_inconsistency_mean": "" if not prediction_inconsistency_values else f"{sum(prediction_inconsistency_values) / len(prediction_inconsistency_values):.4f}",
+        "final_mug_plate_xy_dist": "" if not final_xy_values else f"{sum(final_xy_values) / len(final_xy_values):.4f}",
+        "min_mug_plate_xy_dist": "" if not min_xy_values else f"{sum(min_xy_values) / len(min_xy_values):.4f}",
         "failure_mode": failure_mode,
         "video_path": video_path,
         "notes": exp["question"],
@@ -359,3 +410,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

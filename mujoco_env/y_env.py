@@ -1,4 +1,4 @@
-"""
+﻿"""
 简单环境类
 用于定义环境的初始化、重置、步进等操作
 """
@@ -63,7 +63,8 @@ class SimpleEnv:
         重置环境
         将机器人移动到初始位置，根据种子设置物体位置
         '''
-        if seed != None: np.random.seed(seed=0) 
+        if seed is not None:
+            np.random.seed(seed=seed) 
         q_init = np.deg2rad([0,0,0,0,0,0])
         # 机械臂初始位置
         q_zero = np.deg2rad([0, -90, 90, -90, -90, 90])
@@ -292,6 +293,41 @@ class SimpleEnv:
         gripper_cmd = 1.0 if gripper[0] > 0.5 else 0.0
         return np.concatenate([delta, [gripper_cmd]],dtype=np.float32)
 
+    def get_gripper_qpos(self):
+        """返回夹爪关节位置，便于部署指标判断夹爪是否真正松开。"""
+        gripper = self.env.get_qpos_joint('right_driver_joint')
+        return float(np.asarray(gripper).reshape(-1)[0])
+
+    def get_task_metrics(self, placement_xy_threshold=0.1):
+        """返回杯盘距离、夹爪状态和双口径成功信号，用于论文实验评估。"""
+        p_mug = self.env.get_p_body('body_obj_mug_5')
+        p_plate = self.env.get_p_body('body_obj_plate_11')
+        ee_z = float(self.env.get_p_body('wrist_3_link')[2])
+        gripper_qpos = self.get_gripper_qpos()
+        mug_plate_xy_dist = float(np.linalg.norm(p_mug[:2] - p_plate[:2]))
+        mug_plate_z_gap = float(abs(p_mug[2] - p_plate[2]))
+        placement_success = mug_plate_xy_dist < placement_xy_threshold
+        strict_success = (
+            placement_success
+            and mug_plate_z_gap < 0.6
+            and gripper_qpos < 0.1
+            and ee_z > 0.9
+        )
+        return {
+            "mug_position": p_mug.astype(float).tolist(),
+            "plate_position": p_plate.astype(float).tolist(),
+            "mug_plate_xy_dist": mug_plate_xy_dist,
+            "mug_plate_z_gap": mug_plate_z_gap,
+            "final_gripper_qpos": gripper_qpos,
+            "ee_z": ee_z,
+            "placement_success": bool(placement_success),
+            "strict_success": bool(strict_success),
+        }
+
+    def check_placement_success(self, placement_xy_threshold=0.1):
+        """只判断杯子是否到达盘子附近，不要求夹爪释放。"""
+        return self.get_task_metrics(placement_xy_threshold)["placement_success"]
+
     # 判断任务是否成功
     def check_success(self):
         '''
@@ -299,15 +335,7 @@ class SimpleEnv:
         检查杯子是否放在盘子上
         + 夹爪应该打开并且末端执行器应向上移动超过0.9高度
         '''
-        # 获取物体当前位置
-        p_mug = self.env.get_p_body('body_obj_mug_5')
-        p_plate = self.env.get_p_body('body_obj_plate_11')
-
-        if np.linalg.norm(p_mug[:2] - p_plate[:2]) < 0.1 and np.linalg.norm(p_mug[2] - p_plate[2]) < 0.6 and self.env.get_qpos_joint('right_driver_joint') < 0.1:
-            p = self.env.get_p_body('wrist_3_link')[2]
-            if p > 0.9:
-                return True
-        return False
+        return self.get_task_metrics()["strict_success"]
     
     def get_obj_pose(self):
         '''

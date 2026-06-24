@@ -55,8 +55,5 @@ Thumbs.db
 *.log
 
 # for myself
-ACT调参.md
-AGENTS.md
-MUJOCO_LOG.TXT
-README_ACT_TUNING.md
-README_ACT_WSL.md
+docs/
+archive/
