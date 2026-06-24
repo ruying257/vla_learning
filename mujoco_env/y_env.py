@@ -19,18 +19,21 @@ class SimpleEnv:
                  xml_path,
                  action_type='eef_pose',
                  state_type='joint_angle',
-                 seed=None):
+                 seed=None,
+                 use_viewer=True):
         """
         参数:
             xml_path: str, xml文件路径
             action_type: str, 动作空间类型，'eef_pose'、'delta_joint_angle' 或 'joint_angle'
             state_type: str, 状态空间类型，'joint_angle' 或 'ee_pose'
             seed: int, 随机数生成器的种子
+            use_viewer: bool, 是否创建 MuJoCo 窗口；headless 部署时设为 False
         """
         # 加载xml文件
         self.env = MuJoCoParserClass(name='Tabletop', rel_xml_path=xml_path)
         self.action_type = action_type
         self.state_type = state_type
+        self.use_viewer = use_viewer
 
         self.joint_names = ['shoulder_pan_joint',
                     'shoulder_lift_joint',
@@ -38,7 +41,8 @@ class SimpleEnv:
                     'wrist_1_joint',
                     'wrist_2_joint',
                     'wrist_3_joint',]
-        self.init_viewer()
+        if self.use_viewer:
+            self.init_viewer()
         self.reset(seed)
 
     def init_viewer(self):
@@ -169,6 +173,9 @@ class SimpleEnv:
         '''
         渲染环境
         '''
+        if not self.use_viewer:
+            # headless 部署只需要固定相机离屏渲染，不需要窗口叠加层。
+            return
         self.env.plot_time()
         p_current, R_current = self.env.get_pR_body(body_name='wrist_3_link')
         R_current = R_current @ np.array([[1,0,0],[0,0,1],[0,1,0 ]])

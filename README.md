@@ -87,6 +87,12 @@ pip install numpy torch==2.6.0 pillow mujoco==3.6.0 lerobot==0.4.4 transformers
 python 1.collect_data.py
 ```
 
+<p align="center">
+  <img src="assets/数据采集_主视角.gif" width="400" />
+  <img src="assets/数据采集_腕部视角.gif" width="400" />
+</p>
+
+
 使用键盘控制机器人完成任务，数据将保存到 `./demo_data` 目录。
 
 **配置参数**（在 1.collect_data.py 中修改）：

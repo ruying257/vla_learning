@@ -30,7 +30,6 @@ TEMPORAL_ENSEMBLE_COEFF = float(os.environ.get("ACT_TEMPORAL_ENSEMBLE_COEFF", "0
 METRICS_PATH = os.environ.get("ACT_DEPLOY_METRICS_PATH", "")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-
 def build_policy():
     """根据数据集特征和 checkpoint 构建 ACT 策略。"""
     dataset_metadata = LeRobotDatasetMetadata("omy_pnp", root=DATASET_ROOT)

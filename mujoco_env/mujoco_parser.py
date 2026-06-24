@@ -770,6 +770,8 @@ class MuJoCoParserClass(object):
         self.tick              = 0
         self.render_tick       = 0
         self.use_mujoco_viewer = False
+        self.viewer            = None
+        self._offscreen_renderers = {}  # headless 部署时按相机复用 MuJoCo 离屏渲染器。
         
         # Parse xml file
         if (self.rel_xml_path is not None) or (self.xml_string is not None):
@@ -1345,17 +1347,22 @@ class MuJoCoParserClass(object):
         Returns:
             bool: True if the viewer is alive, False otherwise.
         """
-        return self.viewer.is_alive
+        return self.viewer is not None and self.viewer.is_alive
     
     def close_viewer(self):
         """
-        Close and clean up the viewer resources.
+        Close and clean up viewer/offscreen rendering resources.
         
         Returns:
             None
         """
         self.use_mujoco_viewer = False
-        self.viewer.close()
+        if self.viewer is not None:
+            self.viewer.close()
+            self.viewer = None
+        for renderer in self._offscreen_renderers.values():
+            renderer.close()
+        self._offscreen_renderers.clear()
 
     def viewer_text_overlay(
             self,
@@ -2156,6 +2163,17 @@ class MuJoCoParserClass(object):
         cam      = self.cams[cam_idx]
         cam_fov  = self.cam_fovs[cam_idx]
         viewport = self.cam_viewports[cam_idx]
+        if self.viewer is None:
+            # headless 部署不创建 GLFW viewer，直接用 MuJoCo Renderer 从固定相机离屏渲染。
+            width = min(int(viewport.width), int(self.model.vis.global_.offwidth))
+            height = min(int(viewport.height), int(self.model.vis.global_.offheight))
+            key = (cam_name, width, height)
+            renderer = self._offscreen_renderers.get(key)
+            if renderer is None:
+                renderer = mujoco.Renderer(self.model, height=height, width=width)
+                self._offscreen_renderers[key] = renderer
+            renderer.update_scene(self.data, camera=cam_name)
+            return renderer.render().copy()
         # Update
         mujoco.mjv_updateScene(
             self.model,self.data,self.viewer.vopt,self.viewer.pert,
