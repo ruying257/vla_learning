@@ -2,7 +2,7 @@
   "dataset_root": "datasets/demo_v5_30demos_random",
   "ckpt_dir": "./ckpt/v5",
   "xml_path": "./mode/demo_scene.xml",
-  "video_path": "/home/xiaye/vla_learning/experiments/cac_act_paper/videos/CATE_E2_fixed_09/v5_seed3_20260624_222442.mp4",
+  "video_path": "/home/xiaye/vla_learning/experiments/cac_act_paper/CATE_E2_fixed_09/videos/v5_seed3_20260625_145824.mp4",
   "record_video": true,
   "deploy_seed": 3,
   "max_steps": 400,
@@ -19,12 +19,12 @@
   "device": "cuda",
   "initial_mug_position": [
     0.2583997989129602,
-    -0.27426730291068696,
-    0.8819944674045763
+    -0.274267302910687,
+    0.8819944674045764
   ],
   "initial_plate_position": [
-    0.3281169119112863,
-    0.024904206421905287,
+    0.328116911911286,
+    0.02490420642190522,
     0.8078856235290851
   ],
   "strict_success": true,
@@ -33,11 +33,11 @@
   "action_smoothness_max": 1.02009916305542,
   "prediction_inconsistency_mean": 0.06370604343804692,
   "prediction_inconsistency_max": 0.4960249364376068,
-  "final_mug_plate_xy_dist": 0.06712684311035272,
-  "min_mug_plate_xy_dist": 0.061702331401397456,
-  "final_mug_plate_z_gap": 0.04570898210556085,
+  "final_mug_plate_xy_dist": 0.06712684311336685,
+  "min_mug_plate_xy_dist": 0.06170233140239168,
+  "final_mug_plate_z_gap": 0.0457089820928529,
   "min_mug_plate_z_gap": 0.03423516718603792,
-  "final_gripper_qpos": 0.06505537295688027,
+  "final_gripper_qpos": 0.06505537295658412,
   "final_ee_z": 1.1390120959866543,
   "force_release_on_placement": true,
   "force_release_streak": 3,

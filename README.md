@@ -31,6 +31,7 @@ vla/
 ├── 1.collect_data.py          # 数据收集脚本
 ├── 2.visualize_data.py        # 数据可视化脚本
 ├── 3.train.py                 # 模型训练脚本
+├── 3.train_finetune.py        # 基于已有 checkpoint 续训脚本
 ├── 4.deploy.py                # 策略部署脚本
 ├── KeyControl.py              # 键盘控制模块
 ├── LoadMode.py                # 模型加载模块
@@ -127,6 +128,18 @@ python 3.train.py
 
 训练 ACT 模型，模型检查点保存到 `./ckpt/act_y`。
 
+如需基于已有模型继续使用新数据训练，使用续训副本：
+
+```bash
+ACT_RESUME_CKPT_DIR=ckpt/v5 \
+ACT_DATASET_ROOT=datasets/new_data \
+ACT_CKPT_DIR=ckpt/v5_finetune_new_data \
+ACT_LR=1e-5 \
+python 3.train_finetune.py
+```
+
+续训脚本默认禁止把输出目录设成输入 checkpoint 目录，避免覆盖已训练好的模型。
+
 ### 4. 部署策略
 
 ```bash
@@ -165,4 +178,3 @@ python 4.deploy.py
 2. 杯子高度接近盘子
 3. 夹爪打开
 4. 机械臂末端上升到 0.9m 以上
-

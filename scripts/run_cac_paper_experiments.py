@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -46,6 +47,43 @@ RESULT_FIELDS = [
     "video_path",
     "notes",
 ]
+
+SEED_RESULT_FIELDS = [
+    "seed",
+    "executed_steps",
+    "success",
+    "error",
+    "action_smoothness_mean",
+    "action_smoothness_max",
+    "prediction_inconsistency_mean",
+    "prediction_inconsistency_max",
+]
+
+
+def experiment_output_dir(exp):
+    """返回单个实验的独立输出目录。"""
+    return EXP_DIR / exp["id"]
+
+
+def seed_from_metric_path(path):
+    """从 deploy metrics 文件名中解析 seed，用于稳定排序。"""
+    match = re.search(r"deploy_seed(\d+)", path.name)
+    return int(match.group(1)) if match else 10**9
+
+
+def deploy_metric_paths(exp):
+    """合并新旧 metrics 路径；同 seed 时优先使用实验独立目录。"""
+    exp_dir = experiment_output_dir(exp)
+    paths_by_seed = {}
+    legacy_paths = (EXP_DIR / "metrics").glob(f"{exp['id']}_deploy_seed*.json")
+    new_paths = (exp_dir / "metrics").glob("deploy_seed*.json")
+    for path in legacy_paths:
+        seed = seed_from_metric_path(path)
+        paths_by_seed[seed if seed != 10**9 else path.name] = path
+    for path in new_paths:
+        seed = seed_from_metric_path(path)
+        paths_by_seed[seed if seed != 10**9 else path.name] = path
+    return sorted(paths_by_seed.values(), key=seed_from_metric_path)
 
 
 def clean_proxy(env):
@@ -276,6 +314,7 @@ def ensure_checkpoint(exp, phases, dry_run):
 def train_env(base_env, exp, args):
     env = dict(base_env)
     clean_proxy(env)
+    exp_dir = experiment_output_dir(exp)
     env.update(
         {
             "PYTHONUNBUFFERED": "1",
@@ -288,7 +327,7 @@ def train_env(base_env, exp, args):
             "ACT_NUM_WORKERS": str(args.num_workers),
             "ACT_LOG_FREQ": str(args.log_freq),
             "ACT_TRAINING_STEPS": str(args.training_steps),
-            "ACT_METRICS_PATH": str(EXP_DIR / "metrics" / f"{exp['id']}_train.json"),
+            "ACT_METRICS_PATH": str(exp_dir / "metrics" / "train.json"),
         }
     )
     if exp.get("stage_resampling"):
@@ -299,6 +338,7 @@ def train_env(base_env, exp, args):
 def deploy_env(base_env, exp, args, seed):
     env = dict(base_env)
     clean_proxy(env)
+    exp_dir = experiment_output_dir(exp)
     env.update(
         {
             "PYTHONUNBUFFERED": "1",
@@ -309,9 +349,9 @@ def deploy_env(base_env, exp, args, seed):
             "ACT_TEMPORAL_ENSEMBLE_COEFF": str(exp["temporal_ensemble_coeff"]),
             "ACT_DEPLOY_MAX_STEPS": str(args.deploy_max_steps),
             "ACT_DEPLOY_SEED": str(seed),
-            "ACT_VIDEO_DIR": str(EXP_DIR / "videos" / exp["id"]),
+            "ACT_VIDEO_DIR": str(exp_dir / "videos"),
             "ACT_RECORD_VIDEO": "1",
-            "ACT_DEPLOY_METRICS_PATH": str(EXP_DIR / "metrics" / f"{exp['id']}_deploy_seed{seed}.json"),
+            "ACT_DEPLOY_METRICS_PATH": str(exp_dir / "metrics" / f"deploy_seed{seed}.json"),
             "ACT_FORCE_RELEASE_ON_PLACEMENT": "1",
             "ACT_FORCE_RELEASE_STREAK": str(DEFAULT_FORCE_RELEASE_STREAK),
         }
@@ -336,7 +376,9 @@ def print_env_delta(env):
         "ACT_ADAPTIVE_TE",
         "ACT_STAGE_RESAMPLING",
         "ACT_TRAINING_STEPS",
+        "ACT_METRICS_PATH",
         "ACT_DEPLOY_SEED",
+        "ACT_VIDEO_DIR",
         "ACT_DEPLOY_METRICS_PATH",
         "ACT_FORCE_RELEASE_ON_PLACEMENT",
         "ACT_FORCE_RELEASE_STREAK",
@@ -378,6 +420,14 @@ def read_json(path):
         return json.load(f)
 
 
+def file_signature(path):
+    """记录文件状态，用于判断本次 deploy 是否真的写了新 metrics。"""
+    if not path.exists():
+        return None
+    stat = path.stat()
+    return stat.st_mtime_ns, stat.st_size
+
+
 def rate(payloads, key):
     values = [bool(payload.get(key, payload.get("success", False))) for payload in payloads]
     return "" if not values else f"{sum(values) / len(values):.2f}"
@@ -404,8 +454,12 @@ def default_args_for_order():
 
 
 def summarize_experiment(exp, args):
-    train_metrics = read_json(EXP_DIR / "metrics" / f"{exp['id']}_train.json")
-    deploy_paths = sorted((EXP_DIR / "metrics").glob(f"{exp['id']}_deploy_seed*.json"))
+    exp_dir = experiment_output_dir(exp)
+    train_metrics = read_json(exp_dir / "metrics" / "train.json")
+    if train_metrics is None:
+        train_metrics = read_json(EXP_DIR / "metrics" / f"{exp['id']}_train.json")
+
+    deploy_paths = deploy_metric_paths(exp)
     deploy_payloads = [read_json(path) for path in deploy_paths]
     deploy_payloads = [payload for payload in deploy_payloads if payload]
 
@@ -454,6 +508,79 @@ def summarize_experiment(exp, args):
     }
 
 
+def seed_result_row(path, payload):
+    """把单个 seed 的部署 JSON 压缩成论文排查用的关键指标行。"""
+    seed = payload.get("deploy_seed")
+    if seed is None:
+        seed = seed_from_metric_path(path)
+        if seed == 10**9:
+            seed = ""
+    return {
+        "seed": seed,
+        "executed_steps": payload.get("executed_steps", ""),
+        "success": payload.get("success", ""),
+        "error": payload.get("error", ""),
+        "action_smoothness_mean": payload.get("action_smoothness_mean", ""),
+        "action_smoothness_max": payload.get("action_smoothness_max", ""),
+        "prediction_inconsistency_mean": payload.get("prediction_inconsistency_mean", ""),
+        "prediction_inconsistency_max": payload.get("prediction_inconsistency_max", ""),
+    }
+
+
+def seed_result_key(seed):
+    """统一 seed 键，避免 CSV 字符串和 JSON 数字导致同一 seed 重复。"""
+    if seed is None:
+        return ""
+    seed_text = str(seed).strip()
+    if not seed_text:
+        return ""
+    try:
+        return str(int(seed_text))
+    except ValueError:
+        return seed_text
+
+
+def seed_result_sort_key(row):
+    seed = seed_result_key(row.get("seed"))
+    try:
+        return 0, int(seed)
+    except ValueError:
+        return 1, seed
+
+
+def upsert_seed_results(exp, metric_paths):
+    """只用本次 deploy 生成的 metrics 增量更新 seed_results.csv。"""
+    metric_paths = list(metric_paths)
+    if not metric_paths:
+        return None
+
+    output_path = experiment_output_dir(exp) / "seed_results.csv"
+    rows_by_seed = {}
+    if output_path.exists():
+        with open(output_path, "r", encoding="utf-8", newline="") as f:
+            for row in csv.DictReader(f):
+                key = seed_result_key(row.get("seed"))
+                if key:
+                    rows_by_seed[key] = {field: row.get(field, "") for field in SEED_RESULT_FIELDS}
+
+    for path in metric_paths:
+        payload = read_json(path)
+        if payload:
+            row = seed_result_row(path, payload)
+            key = seed_result_key(row.get("seed"))
+            if key:
+                row["seed"] = key
+                rows_by_seed[key] = row
+
+    rows = sorted(rows_by_seed.values(), key=seed_result_sort_key)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=SEED_RESULT_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    return output_path
+
+
 def upsert_result(row):
     rows = []
     if RESULTS_PATH.exists():
@@ -472,6 +599,16 @@ def upsert_result(row):
         writer.writerows(rows)
 
 
+def update_run_outputs(exp, args, updated_metric_paths):
+    """部署中途失败也要落盘已产生的有效 metrics。"""
+    if args.dry_run:
+        return
+    seed_results_path = upsert_seed_results(exp, updated_metric_paths)
+    upsert_result(summarize_experiment(exp, args))
+    if seed_results_path:
+        print(f"updated: {seed_results_path}")
+
+
 def run_one(exp, args):
     phases = phase_for(exp, args.phase)
     ensure_supported(exp, phases, args.dry_run)
@@ -480,13 +617,14 @@ def run_one(exp, args):
 
     base_env = os.environ.copy()
     python_cmd = [sys.executable]
+    updated_metric_paths = []
 
     if "train" in phases:
         env = train_env(base_env, exp, args)
         code = run_command(
             python_cmd + ["3.train.py"],
             env,
-            EXP_DIR / "logs" / f"{exp['id']}_train.log",
+            experiment_output_dir(exp) / "logs" / "train.log",
             args.dry_run,
         )
         if code != 0:
@@ -496,29 +634,32 @@ def run_one(exp, args):
         for seed in range(args.deploy_seed_start, args.deploy_seed_start + args.deploy_trials):
             env = deploy_env(base_env, exp, args, seed)
             metrics_path = Path(env["ACT_DEPLOY_METRICS_PATH"])
-            if metrics_path.exists() and not args.dry_run:
-                metrics_path.unlink()
+            before_signature = file_signature(metrics_path)
             code = run_command(
                 python_cmd + [DEPLOY_SCRIPT],
                 env,
-                EXP_DIR / "logs" / f"{exp['id']}_deploy_seed{seed}.log",
+                experiment_output_dir(exp) / "logs" / f"deploy_seed{seed}.log",
                 args.dry_run,
             )
+            after_signature = file_signature(metrics_path)
+            if after_signature is not None and after_signature != before_signature:
+                updated_metric_paths.append(metrics_path)
             if code != 0:
                 print(f"deploy seed {seed} failed with exit code {code}")
                 if not args.continue_on_fail:
+                    update_run_outputs(exp, args, updated_metric_paths)
                     raise SystemExit(code)
             if seed + 1 < args.deploy_seed_start + args.deploy_trials and args.deploy_cooldown > 0:
                 time.sleep(args.deploy_cooldown)
 
-    if not args.dry_run:
-        upsert_result(summarize_experiment(exp, args))
+    update_run_outputs(exp, args, updated_metric_paths)
 
 
 def summarize_only(exps, args):
     for exp in exps:
         upsert_result(summarize_experiment(exp, args))
     print(f"updated: {RESULTS_PATH}")
+    print("seed_results.csv is only incrementally updated after deploy writes metrics.")
 
 
 def parse_args():
@@ -539,8 +680,8 @@ def parse_args():
     parser.add_argument("--learning-rate", default="1e-4")
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--log-freq", type=int, default=500)
-    parser.add_argument("--deploy-trials", type=int, default=5)
-    parser.add_argument("--deploy-seed-start", type=int, default=0)
+    parser.add_argument("--deploy-trials", type=int, default=20)
+    parser.add_argument("--deploy-seed-start", type=int, default=1)
     parser.add_argument("--deploy-max-steps", type=int, default=400)
     parser.add_argument("--deploy-cooldown", type=float, default=2.0)
     parser.add_argument("--adaptive-alpha-min", type=float, default=0.5)

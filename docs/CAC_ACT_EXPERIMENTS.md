@@ -71,10 +71,23 @@ experiments/cac_act_paper/
 
 主要文件包括：
 
-- `logs/`：训练和部署日志。
-- `metrics/`：每组训练指标和每个 seed 的部署指标。
-- `videos/`：部署视频。
-- `results.csv`：论文实验汇总表。
+- `<exp_id>/logs/`：单个实验的训练和部署日志。
+- `<exp_id>/metrics/`：单个实验的训练指标和每个 seed 的部署指标。
+- `<exp_id>/videos/`：单个实验的部署视频。
+- `<exp_id>/seed_results.csv`：单个实验内按 seed 增量汇总的关键部署指标。
+- `results.csv`：所有实验共享的论文实验汇总表。
+
+示例结构：
+
+```text
+experiments/cac_act_paper/CATE_E2_fixed_09/
+  logs/
+    deploy_seed1.log
+  metrics/
+    deploy_seed1.json
+  seed_results.csv
+  videos/
+```
 
 结果表字段包含：
 
@@ -86,6 +99,18 @@ avg_steps / avg_success_steps / action_smoothness_mean /
 prediction_inconsistency_mean / final_mug_plate_xy_dist /
 min_mug_plate_xy_dist / failure_mode / video_path / notes
 ```
+
+`seed_results.csv` 每一行对应一个 deploy seed，字段包含：
+
+```text
+seed / executed_steps / success / error / action_smoothness_mean /
+action_smoothness_max / prediction_inconsistency_mean /
+prediction_inconsistency_max
+```
+
+`seed_results.csv` 只在实际 deploy 写出 metrics 后按 seed 增量更新：补跑单个 seed 时会替换该 seed 行，新 seed 会追加到表中，未重跑或未产生 metrics 的 seed 保持不变。全局 `results.csv` 仍会基于当前可读取的 metrics 汇总更新。
+
+`--summarize-only` 只刷新全局 `results.csv`，不会改动 `seed_results.csv`，避免误刷新未重跑的 seed 行。
 
 ## 论文表述边界
 

@@ -24,7 +24,7 @@ XML_PATH = os.environ.get("ACT_XML_PATH", "./mode/demo_scene.xml")
 OUTPUT_DIR = os.environ.get("ACT_VIDEO_DIR", "./videos")
 RECORD_VIDEO = os.environ.get("ACT_RECORD_VIDEO", "1") == "1"
 MAX_STEPS = int(os.environ.get("ACT_DEPLOY_MAX_STEPS", "400"))  # 最大部署步数 400
-DEPLOY_SEED = int(os.environ.get("ACT_DEPLOY_SEED", "0"))
+DEPLOY_SEED = int(os.environ.get("ACT_DEPLOY_SEED", "3"))
 CHUNK_SIZE = int(os.environ.get("ACT_CHUNK_SIZE", "50"))
 N_ACTION_STEPS = int(os.environ.get("ACT_N_ACTION_STEPS", "1"))
 TEMPORAL_ENSEMBLE_COEFF = float(os.environ.get("ACT_TEMPORAL_ENSEMBLE_COEFF", "0.9"))
