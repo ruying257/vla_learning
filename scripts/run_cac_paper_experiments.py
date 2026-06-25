@@ -135,6 +135,18 @@ def experiment_matrix(args):
             "notes": "原始 ACT，无 temporal ensemble；用于验证不平滑时的动作抖动。",
         },
         {
+            "id": "CATE_E1b_fixed_03",
+            "suite": "cate",
+            "phase_default": "deploy",
+            "dataset_root": DEFAULT_BASELINE_DATASET,
+            "ckpt_dir": cate_ckpt,
+            "temporal_ensemble_coeff": "0.3",
+            "adaptive_te": False,
+            "stage_resampling": False,
+            "deploy_only": True,
+            "notes": "固定 temporal ensemble 系数 0.3，弱平滑，响应更敏感但可能更抖。",
+        },
+        {
             "id": "CATE_E1_fixed_07",
             "suite": "cate",
             "phase_default": "deploy",
@@ -372,6 +384,8 @@ def print_env_delta(env):
     keys = [
         "ACT_DATASET_ROOT",
         "ACT_CKPT_DIR",
+        "ACT_CHUNK_SIZE",
+        "ACT_N_ACTION_STEPS",
         "ACT_TEMPORAL_ENSEMBLE_COEFF",
         "ACT_ADAPTIVE_TE",
         "ACT_STAGE_RESAMPLING",

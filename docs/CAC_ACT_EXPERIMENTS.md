@@ -22,6 +22,12 @@ python scripts/run_cac_paper_experiments.py --list
 python scripts/run_cac_paper_experiments.py --suite cate --dry-run
 ```
 
+只运行无 temporal ensemble 对照：
+
+```bash
+python scripts/run_no_temporal_ensemble_experiment.py --deploy-seed-start 1 --deploy-trials 1
+```
+
 只打印 FGDA 命令，不启动训练或 MuJoCo：
 
 ```bash
@@ -44,12 +50,15 @@ python scripts/run_cac_paper_experiments.py --suite fgda --failure-guided-datase
 
 | 实验 | 含义 | 当前状态 |
 | --- | --- | --- |
-| `CATE_E0_no_ensemble` | 原始 ACT，无时间集成 | 需要 `4.deploy.py` 支持 `ACT_TEMPORAL_ENSEMBLE_COEFF=none` |
+| `CATE_E0_no_ensemble` | 原始 ACT，无时间集成 | 通过 `ACT_TEMPORAL_ENSEMBLE_COEFF=none` 关闭时间集成 |
+| `CATE_E1b_fixed_03` | 固定时间集成，系数 0.3 | 可编排 |
 | `CATE_E1_fixed_07` | 固定时间集成，系数 0.7 | 可编排 |
 | `CATE_E2_fixed_09` | 固定时间集成，系数 0.9 | 可编排 |
 | `CATE_E3_adaptive_pending` | 自适应时间集成 | pending，需要后续接入 `ACT_ADAPTIVE_TE` |
 
 CATE 默认使用 `./ckpt/act_y`，可通过 `--ckpt-dir` 覆盖。
+
+`scripts/run_no_temporal_ensemble_experiment.py` 是 `CATE_E0_no_ensemble` 的专用入口。它固定 `ACT_TEMPORAL_ENSEMBLE_COEFF=none`，并默认令 `ACT_N_ACTION_STEPS=ACT_CHUNK_SIZE`，让无集成对照按完整 action chunk 执行；如需测试更短动作片段，可显式传 `--n-action-steps` 覆盖。
 
 ## FGDA 实验矩阵
 

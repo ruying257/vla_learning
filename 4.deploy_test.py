@@ -27,13 +27,23 @@ MAX_STEPS = int(os.environ.get("ACT_DEPLOY_MAX_STEPS", "400"))  # 最大部署�
 DEPLOY_SEED = int(os.environ.get("ACT_DEPLOY_SEED", "3"))
 CHUNK_SIZE = int(os.environ.get("ACT_CHUNK_SIZE", "50"))
 N_ACTION_STEPS = int(os.environ.get("ACT_N_ACTION_STEPS", "1"))
-TEMPORAL_ENSEMBLE_COEFF = float(os.environ.get("ACT_TEMPORAL_ENSEMBLE_COEFF", "0.9"))
 METRICS_PATH = os.environ.get("ACT_DEPLOY_METRICS_PATH", "exp_log")
 PLACEMENT_XY_THRESHOLD = float(os.environ.get("ACT_PLACEMENT_XY_THRESHOLD", "0.1"))
 PLACEMENT_Z_THRESHOLD = float(os.environ.get("ACT_PLACEMENT_Z_THRESHOLD", "0.08"))
 FORCE_RELEASE_ON_PLACEMENT = os.environ.get("ACT_FORCE_RELEASE_ON_PLACEMENT", "1") == "1"
 FORCE_RELEASE_STREAK = int(os.environ.get("ACT_FORCE_RELEASE_STREAK", "3"))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def parse_temporal_ensemble_coeff(value):
+    """把 none/null 显式映射为无 temporal ensemble，其他值按浮点系数处理。"""
+    value_text = str(value).strip().lower()
+    if value_text in {"none", "null"}:
+        return None
+    return float(value_text)
+
+
+TEMPORAL_ENSEMBLE_COEFF = parse_temporal_ensemble_coeff(os.environ.get("ACT_TEMPORAL_ENSEMBLE_COEFF", "0.9"))
 
 
 def get_ckpt_name():
