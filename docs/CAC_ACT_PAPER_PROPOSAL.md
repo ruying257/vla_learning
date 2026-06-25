@@ -83,12 +83,41 @@ a_t = TemporalEnsemble({a_t^i}, alpha_t)
 | `lambda` | 5 到 20 | 控制一致性到置信度的映射强度 |
 | `window_size` | 10 到 50 | 用于集成的历史 chunk 数量 |
 
-### 3. 实现方案
+### 3. 部署侧轻量模块设计
 
-建议先只改 headless 部署脚本，不改训练代码：
+该模块位于 ACT policy 输出和 MuJoCo 环境执行动作之间。ACT 原模型仍负责根据当前观测预测 action chunk，部署侧模块只负责决定当前 step 如何融合历史 chunk 中对当前时刻的多个动作预测。
+
+模块输入：
+
+- 当前 step 的 policy 输入 observation。
+- 当前 ACT 预测的 action chunk。
+- 历史 action chunk 缓存，缓存项包含 chunk 的起始 step 和动作序列。
+
+模块输出：
+
+- 当前实际执行动作。
+- 当前预测不一致性 `u_t`。
+- 当前自适应平滑系数 `alpha_t`。
+
+执行流程：
+
+1. 每个部署 step 调用 ACT 预测新的 action chunk。
+2. 将 chunk 与起始 step 一起存入缓存。
+3. 从缓存中取出所有仍覆盖当前 step 的动作预测。
+4. 计算这些预测之间的平均 L2 分歧，得到 `u_t`。
+5. 将 `u_t` 映射为 `alpha_t`。预测越一致，`alpha_t` 越大，动作越平滑；预测越分歧，`alpha_t` 越小，最新预测占比越高。
+6. 用 `alpha_t` 对当前可用预测做时间集成，得到最终动作并送入 MuJoCo。
+
+从第一性原理看，这个模块利用的是 ACT action chunk 自带的多步预测冗余。它不需要额外网络，也不需要修改 loss，只把不同历史 chunk 对当前动作的“意见分歧”当作部署时置信度。
+
+工程上可以把它做成独立部署脚本，例如 `4.deploy_cate_adaptive.py`，并用独立批量 runner `scripts/run_cate_adaptive_experiments.py` 组织 CATE-E0 到 CATE-E3 的对照实验，避免影响原有部署脚本和已有实验结果。
+
+### 4. 实现方案
+
+建议新增独立部署脚本，不改训练代码和现有部署代码：
 
 - 新增动作集成函数，例如 `compute_adaptive_temporal_ensemble(...)`。
-- 在 `4.deploy_headless.py` 中保存历史 action chunk。
+- 在 `4.deploy_cate_adaptive.py` 中保存历史 action chunk。
 - 每个 step 根据当前可用预测计算 `u_t` 和 `alpha_t`。
 - 将 `alpha_t`、`u_t`、动作差分写入 metrics，便于论文分析。
 
@@ -96,19 +125,21 @@ a_t = TemporalEnsemble({a_t^i}, alpha_t)
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `ACT_ADAPTIVE_TE` | `0` | 是否启用自适应时间集成 |
+| `ACT_ADAPTIVE_TE` | `1` | 是否启用自适应时间集成；固定对照由 runner 显式设为 `0` |
 | `ACT_ADAPTIVE_ALPHA_MIN` | `0.5` | 最小平滑系数 |
 | `ACT_ADAPTIVE_ALPHA_MAX` | `0.95` | 最大平滑系数 |
 | `ACT_ADAPTIVE_LAMBDA` | `10` | 不一致性映射系数 |
+| `ACT_ADAPTIVE_WINDOW_SIZE` | `50` | 历史 chunk 缓存窗口 |
 
-### 4. 实验方案
+### 5. 实验方案
 
 对照组设计：
 
 | 实验编号 | 方法 | 说明 |
 | --- | --- | --- |
 | CATE-E0 | 原始 ACT，无时间集成 | 验证不平滑时的抖动问题 |
-| CATE-E1 | 固定 `alpha=0.7` | 响应较快的固定平滑 |
+| CATE-E1b | 固定 `alpha=0.3` | 弱平滑，响应更敏感但可能更抖 |
+| CATE-E1 | 固定 `alpha=0.7` | 中等平滑，响应较快 |
 | CATE-E2 | 固定 `alpha=0.9` | 当前常用强平滑基线 |
 | CATE-E3 | 自适应时间集成 | 本文方法 |
 
@@ -148,10 +179,16 @@ ACT_RECORD_VIDEO=1 ACT_DEPLOY_MAX_STEPS=300 ACT_TEMPORAL_ENSEMBLE_COEFF=0.9 pyth
 自适应版本实现后可使用：
 
 ```bash
-ACT_RECORD_VIDEO=1 ACT_DEPLOY_MAX_STEPS=300 ACT_ADAPTIVE_TE=1 python 4.deploy_headless.py
+ACT_RECORD_VIDEO=1 ACT_DEPLOY_MAX_STEPS=300 ACT_ADAPTIVE_TE=1 python 4.deploy_cate_adaptive.py
 ```
 
-### 5. 预期结果
+批量实验可使用：
+
+```bash
+python scripts/run_cate_adaptive_experiments.py --exp CATE_E3_adaptive --deploy-trials 20
+```
+
+### 6. 预期结果
 
 预期趋势：
 
@@ -164,7 +201,7 @@ ACT_RECORD_VIDEO=1 ACT_DEPLOY_MAX_STEPS=300 ACT_ADAPTIVE_TE=1 python 4.deploy_he
 
 > 自适应时间集成利用 action chunk 预测之间的一致性估计策略置信度，在不重新训练模型的情况下改善了部署阶段动作稳定性和纠偏能力。
 
-### 6. 可行性分析
+### 7. 可行性分析
 
 优点：
 
