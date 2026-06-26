@@ -2,7 +2,7 @@
 基于已有 ACT checkpoint 继续训练。
 命令示例：
   ACT_RESUME_CKPT_DIR=ckpt/v5 \
-  ACT_DATASET_ROOT=datasets/new_data \
+  ACT_DATASET_ROOT=failure_seed_data \
   ACT_CKPT_DIR=ckpt/v5_finetune_new_data \
   ACT_LR=1e-5 \
   python 3.train_finetune.py
@@ -27,9 +27,9 @@ except ImportError:
 
 
 # 续训脚本必须显式指定输入 checkpoint，避免误以为普通训练就是 resume。
-DATASET_ROOT = os.environ.get("ACT_DATASET_ROOT", "datasets/demo_v5_30demos_random")    # 新训练数据集根目录
+DATASET_ROOT = os.environ.get("ACT_DATASET_ROOT", "failure_seed_data")    # 新训练数据集根目录
 RESUME_CKPT_DIR = os.environ.get("ACT_RESUME_CKPT_DIR", "")                             # 已训练好的 checkpoint 目录
-CKPT_DIR = os.environ.get("ACT_CKPT_DIR", "./ckpt/act_y_finetune")                      # 续训输出目录
+CKPT_DIR = os.environ.get("ACT_CKPT_DIR", "./ckpt/v5_finetune_new_data")                      # 续训输出目录
 TRAINING_STEPS = int(os.environ.get("ACT_TRAINING_STEPS", "1000"))                      # 续训步数
 LOG_FREQ = int(os.environ.get("ACT_LOG_FREQ", "10"))                                   # 日志记录频率
 BATCH_SIZE = int(os.environ.get("ACT_BATCH_SIZE", "64"))                                # 批次大小
@@ -37,11 +37,11 @@ NUM_WORKERS = int(os.environ.get("ACT_NUM_WORKERS", "4"))                       
 LEARNING_RATE = float(os.environ.get("ACT_LR", "1e-5"))                                 # 续训默认用更小学习率
 SHOW_PLOT = os.environ.get("ACT_SHOW_PLOT", "0") == "1"                                 # 是否显示训练过程中的可视化
 METRICS_PATH = os.environ.get("ACT_METRICS_PATH", "")                                   # 训练指标保存路径
-ALLOW_OVERWRITE_RESUME = os.environ.get("ACT_ALLOW_OVERWRITE_RESUME", "0") == "1"       # 是否允许覆盖源 checkpoint
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")                   # 训练设备
 
-# 本地跑通默认不启用 WandB，避免因为未登录而中断训练。
-if wandb is not None and os.environ.get("ACT_USE_WANDB", "0") != "1":
+# 续训默认记录 WandB；如需本地离线跑通，可显式设置 ACT_USE_WANDB=0 关闭。
+USE_WANDB = os.environ.get("ACT_USE_WANDB", "1") == "1"
+if wandb is not None and not USE_WANDB:
     wandb = None
 
 
@@ -91,10 +91,10 @@ def ensure_resume_paths():
     if not resume_path.exists():
         raise SystemExit(f"Resume checkpoint missing: {resume_path}")
 
-    if resume_path.resolve() == output_path.resolve() and not ALLOW_OVERWRITE_RESUME:
+    if resume_path.resolve() == output_path.resolve():
         raise SystemExit(
             "ACT_CKPT_DIR is the same as ACT_RESUME_CKPT_DIR. "
-            "Use a new output dir, or set ACT_ALLOW_OVERWRITE_RESUME=1 if overwrite is intentional."
+            "Use a new output dir to keep the source checkpoint unchanged."
         )
 
 
@@ -156,6 +156,7 @@ def main():
                 "dataset_root": DATASET_ROOT,
                 "resume_ckpt_dir": RESUME_CKPT_DIR,
                 "ckpt_dir": CKPT_DIR,
+                "use_wandb": USE_WANDB,
                 "training_steps": TRAINING_STEPS,
                 "log_freq": LOG_FREQ,
                 "chunk_size": cfg.chunk_size,
@@ -250,6 +251,7 @@ def main():
             "dataset_root": DATASET_ROOT,
             "resume_ckpt_dir": RESUME_CKPT_DIR,
             "ckpt_dir": CKPT_DIR,
+            "use_wandb": USE_WANDB,
             "training_steps": TRAINING_STEPS,
             "log_freq": LOG_FREQ,
             "batch_size": BATCH_SIZE,

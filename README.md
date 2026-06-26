@@ -101,6 +101,16 @@ python 1.collect_data.py
 - `SEED = None`：随机种子，物体位置每次不同
 - `NUM_DEMO = 10`：收集演示的次数
 
+如果要针对部署失败的 seed 补采专家数据，可以使用复制版脚本：
+
+```bash
+python 1.collect_failure_seed_data.py --seeds 3
+python 1.collect_failure_seed_data.py --seeds 3,7,11 --root ./datasets/fgda_seed_data
+python 1.collect_failure_seed_data.py --seeds 3,7,11 --demos-per-seed 2
+```
+
+补采脚本默认每个 seed 录制 1 条成功 episode，并保存到 `./demo_failure_seed_data`。也可以在脚本内修改 `DEFAULT_SEEDS`、`DEMOS_PER_SEED` 和 `ROOT` 作为默认配置。
+
 **控制按键：**
 | 按键 | 功能 |
 |------|------|
@@ -138,7 +148,7 @@ ACT_LR=1e-5 \
 python 3.train_finetune.py
 ```
 
-续训脚本默认禁止把输出目录设成输入 checkpoint 目录，避免覆盖已训练好的模型。
+续训脚本默认开启 WandB 记录；如需离线跑通，可设置 `ACT_USE_WANDB=0`。续训输出目录必须和输入 checkpoint 目录不同，避免覆盖已训练好的模型。
 
 ### 4. 部署策略
 

@@ -19,12 +19,12 @@ from mujoco_env.y_env import SimpleEnv
 
 # 部署默认使用仓库内已有数据集和 checkpoint；需要切换时用环境变量覆盖。
 DATASET_ROOT = os.environ.get("ACT_DATASET_ROOT", "datasets/demo_v5_30demos_random")
-CKPT_DIR = os.environ.get("ACT_CKPT_DIR", "./ckpt/v5")
+CKPT_DIR = os.environ.get("ACT_CKPT_DIR", "./ckpt/v5_finetune_new_data")
 XML_PATH = os.environ.get("ACT_XML_PATH", "./mode/demo_scene.xml")
 OUTPUT_DIR = os.environ.get("ACT_VIDEO_DIR", "./videos")
 RECORD_VIDEO = os.environ.get("ACT_RECORD_VIDEO", "1") == "1"
-MAX_STEPS = int(os.environ.get("ACT_DEPLOY_MAX_STEPS", "400"))  # 最大部署步数 400
-DEPLOY_SEED = int(os.environ.get("ACT_DEPLOY_SEED", "3"))
+MAX_STEPS = int(os.environ.get("ACT_DEPLOY_MAX_STEPS", "500"))  # 最大部署步数 500
+DEPLOY_SEED = int(os.environ.get("ACT_DEPLOY_SEED", "6"))
 CHUNK_SIZE = int(os.environ.get("ACT_CHUNK_SIZE", "50"))
 N_ACTION_STEPS = int(os.environ.get("ACT_N_ACTION_STEPS", "1"))
 METRICS_PATH = os.environ.get("ACT_DEPLOY_METRICS_PATH", "exp_log")

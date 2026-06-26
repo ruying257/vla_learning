@@ -1,28 +1,76 @@
 """
-收集演示数据
-用于训练机器人执行任务的演示数据
+针对失败 seed 补采专家演示数据
+用于模型再训练
 请在收集数据时，保持机器人在任务中执行，避免在任务完成后停止
 注意：使用wsl2录制专家数据时，打开mujoco会很卡，建议在Ubuntu系统上录制
 """
 import sys
+import argparse
 import random
 import numpy as np
 import os
-from PIL import Image
-from mujoco_env.y_env import SimpleEnv
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-# 如果要随机化物体位置，请将此设置为 None
-# 如果固定 seed，物体位置每次都将相同
-SEED = 0
-# SEED = None  # <- 取消注释此行以随机化物体位置
+# 在这里修改默认失败 seed；也可以通过命令行 --seeds 覆盖
+DEFAULT_SEEDS = [5,6,12,13,16]
 
 REPO_NAME = 'ur_pnp'
-NUM_DEMO = 50  # 要收集的演示次数
-ROOT = "./demo_data"  # 保存演示数据的根目录
+DEMOS_PER_SEED = 1  # 每个 seed 默认录制的成功演示次数
+ROOT = "./demo_failure_seed_data"  # 补采数据默认保存到独立目录，避免覆盖原始数据
 
 TASK_NAME = '将马克杯放在盘子上'
 xml_path = './mode/demo_scene.xml'
+
+
+def parse_seed_list(seed_text):
+    """解析逗号分隔的 seed 列表，例如 3 或 3,7,11。"""
+    try:
+        seeds = [int(seed.strip()) for seed in seed_text.split(",") if seed.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("--seeds 只支持整数或逗号分隔的整数列表") from exc
+    if not seeds:
+        raise argparse.ArgumentTypeError("--seeds 至少需要指定一个整数 seed")
+    return seeds
+
+
+def parse_args():
+    """命令行参数用于临时覆盖代码里的默认补采配置。"""
+    parser = argparse.ArgumentParser(description="按指定 seed 补采专家演示数据")
+    parser.add_argument(
+        "--seeds",
+        type=parse_seed_list,
+        default=None,
+        help="要补采的 seed，支持单个整数或逗号分隔列表，例如 3 或 3,7,11",
+    )
+    parser.add_argument(
+        "--demos-per-seed",
+        type=int,
+        default=DEMOS_PER_SEED,
+        help="每个 seed 录制的成功 episode 数，默认 1",
+    )
+    parser.add_argument(
+        "--root",
+        default=ROOT,
+        help=f"数据集保存目录，默认 {ROOT}",
+    )
+    args = parser.parse_args()
+    if args.demos_per_seed <= 0:
+        parser.error("--demos-per-seed 必须大于 0")
+    return args
+
+
+args = parse_args()
+TARGET_SEEDS = args.seeds if args.seeds is not None else DEFAULT_SEEDS
+DEMOS_PER_SEED = args.demos_per_seed
+ROOT = args.root
+
+TOTAL_DEMOS = len(TARGET_SEEDS) * DEMOS_PER_SEED
+print(f"补采 seed 列表: {TARGET_SEEDS}")
+print(f"每个 seed 录制 {DEMOS_PER_SEED} 条成功 episode，总计 {TOTAL_DEMOS} 条")
+print(f"数据保存目录: {ROOT}")
+
+from PIL import Image
+from mujoco_env.y_env import SimpleEnv
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 create_new = True
 if os.path.exists(ROOT):
@@ -74,13 +122,16 @@ else:
     print("从之前的数据集加载")
     dataset = LeRobotDataset(REPO_NAME, root=ROOT)
 
-# 定义环境
-PnPEnv = SimpleEnv(xml_path, seed=SEED, state_type='joint_angle')
+# 定义环境；当前 seed 完成指定条数后，再切换到下一个 seed
+seed_index = 0
+current_seed = TARGET_SEEDS[seed_index]
+current_seed_episode_id = 0
+PnPEnv = SimpleEnv(xml_path, seed=current_seed, state_type='joint_angle')
 
 action = np.zeros(7)
 episode_id = 0
 record_flag = False  # 机器人开始移动时开始录制
-while PnPEnv.env.is_viewer_alive() and episode_id < NUM_DEMO:
+while PnPEnv.env.is_viewer_alive() and episode_id < TOTAL_DEMOS:
     PnPEnv.step_env()
     if PnPEnv.env.loop_every(HZ=20):
         # 检查 episode 是否完成
@@ -90,13 +141,24 @@ while PnPEnv.env.is_viewer_alive() and episode_id < NUM_DEMO:
             if record_flag:
                 dataset.save_episode()
                 episode_id += 1
-                print(f"成功保存第 {episode_id} 个 Episode！")
+                current_seed_episode_id += 1
+                print(
+                    f"成功保存 seed={current_seed} 的第 {current_seed_episode_id}/{DEMOS_PER_SEED} 条 "
+                    f"Episode，总进度 {episode_id}/{TOTAL_DEMOS}！"
+                )
             else:
                 # 触发了罕见的“幸运刷新”（开局即成功），这是一条废数据，直接跳过不保存
                 print("幸运刷新！杯子已经在盘子上了，跳过保存，重新刷新环境...")
+
+            if current_seed_episode_id >= DEMOS_PER_SEED and episode_id < TOTAL_DEMOS:
+                # 当前 seed 达标后切换到下一个 seed，保证失败场景按清单逐个补采
+                seed_index += 1
+                current_seed = TARGET_SEEDS[seed_index]
+                current_seed_episode_id = 0
+                print(f"切换到下一个 seed: {current_seed}")
             
             # 重置环境和底层缓冲区
-            PnPEnv.reset(seed=SEED)
+            PnPEnv.reset(seed=current_seed)
             dataset.clear_episode_buffer() # 清理掉可能残留的空帧
             
             # 务必关闭录制标志，等待人类下一步操作
@@ -109,7 +171,7 @@ while PnPEnv.env.is_viewer_alive() and episode_id < NUM_DEMO:
         if reset:
             # 重置环境并清理 episode 缓冲区
             # 可以通过按 'z' 键完成
-            PnPEnv.reset(seed=SEED)
+            PnPEnv.reset(seed=current_seed)
             # PnPEnv.reset()
             dataset.clear_episode_buffer()
             record_flag = False

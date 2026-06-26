@@ -1,4 +1,4 @@
-﻿# 运行 FGDA checkpoint 的 TE deploy sweep
+﻿# 运行 CATE 自适应时间集成实验脚本
 
 import argparse
 import csv
@@ -10,26 +10,13 @@ import sys
 import time
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
-EXP_DIR = ROOT / "experiments" / "cac_act_paper"
+EXP_DIR = ROOT / "experiments" / "cate_adaptive_paper"
 RESULTS_PATH = EXP_DIR / "results.csv"
-DEFAULT_FAILURE_GUIDED_DATASET = "failure_seed_data"
-DEFAULT_FGDA_CKPT = "./ckpt/v5_finetune_new_data"
+DEFAULT_BASELINE_DATASET = "datasets/demo_v5_30demos_random"
+DEFAULT_CATE_CKPT = "./ckpt/v5"
 DEFAULT_FORCE_RELEASE_STREAK = 3
-DEPLOY_SCRIPT = "4.deploy_test.py"
-
-TE_SWEEP = [
-    ("FGDA_TE_none", "none", "FGDA 新 checkpoint，无 temporal ensemble 对照。"),
-    ("FGDA_TE_001", "0.01", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.01。"),
-    ("FGDA_TE_005", "0.05", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.05。"),
-    ("FGDA_TE_010", "0.10", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.10。"),
-    ("FGDA_TE_015", "0.15", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.15。"),
-    ("FGDA_TE_020", "0.20", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.20。"),
-    ("FGDA_TE_030", "0.30", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.30。"),
-    ("FGDA_TE_070", "0.70", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.70。"),
-    ("FGDA_TE_090", "0.90", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.90。"),
-]
+DEPLOY_SCRIPT = "4.deploy_cate_adaptive.py"
 
 RESULT_FIELDS = [
     "exp_id",
@@ -110,74 +97,192 @@ def supports_deploy_no_ensemble():
     return has_temporal_env and parses_none_literal
 
 
+def supports_adaptive_temporal_ensemble():
+    """检查 deploy 脚本是否支持自适应 temporal ensemble。"""
+    deploy_text = (ROOT / DEPLOY_SCRIPT).read_text(encoding="utf-8", errors="ignore")
+    return "ACT_ADAPTIVE_TE" in deploy_text
+
+
+
+
 def experiment_matrix(args):
-    """返回 FGDA 新 checkpoint 在不同 TE 参数下的 deploy sweep。"""
-    ckpt_dir = args.ckpt_dir
-    failure_dataset = args.failure_guided_dataset
-    experiments = []
-    for exp_id, te_coeff, notes in TE_SWEEP:
-        experiments.append(
-            {
-                "id": exp_id,
-                "suite": "fgda",
-                "dataset_root": failure_dataset,
-                "ckpt_dir": ckpt_dir,
-                "temporal_ensemble_coeff": te_coeff,
-                "adaptive_te": False,
-                "stage_resampling": False,
-                "requires_no_ensemble_support": te_coeff == "none",
-                "notes": notes,
-            }
-        )
-    return experiments
+    """返回 CATE 部署策略实验矩阵。"""
+    cate_ckpt = args.ckpt_dir
+    dataset_root = args.dataset_root
+
+    return [
+        {
+            "id": "CATE_E0_no_ensemble",
+            "suite": "cate",
+            "phase_default": "deploy",
+            "dataset_root": dataset_root,
+            "ckpt_dir": cate_ckpt,
+            "temporal_ensemble_coeff": "none",
+            "adaptive_te": False,
+            "stage_resampling": False,
+            "deploy_only": True,
+            "requires_no_ensemble_support": True,
+            "notes": "原始 ACT，无 temporal ensemble；用于验证不平滑时的动作抖动。",
+        },
+        {
+            "id": "CATE_E1b_fixed_03",
+            "suite": "cate",
+            "phase_default": "deploy",
+            "dataset_root": dataset_root,
+            "ckpt_dir": cate_ckpt,
+            "temporal_ensemble_coeff": "0.3",
+            "adaptive_te": False,
+            "stage_resampling": False,
+            "deploy_only": True,
+            "notes": "固定 temporal ensemble 系数 0.3，弱平滑，响应更敏感但可能更抖。",
+        },
+        {
+            "id": "CATE_E1_fixed_07",
+            "suite": "cate",
+            "phase_default": "deploy",
+            "dataset_root": dataset_root,
+            "ckpt_dir": cate_ckpt,
+            "temporal_ensemble_coeff": "0.7",
+            "adaptive_te": False,
+            "stage_resampling": False,
+            "deploy_only": True,
+            "notes": "固定 temporal ensemble 系数 0.7，响应较快但可能更抖。",
+        },
+        {
+            "id": "CATE_E2_fixed_09",
+            "suite": "cate",
+            "phase_default": "deploy",
+            "dataset_root": dataset_root,
+            "ckpt_dir": cate_ckpt,
+            "temporal_ensemble_coeff": "0.9",
+            "adaptive_te": False,
+            "stage_resampling": False,
+            "deploy_only": True,
+            "notes": "固定 temporal ensemble 系数 0.9，当前强平滑基线。",
+        },
+        {
+            "id": "CATE_E3_adaptive",
+            "suite": "cate",
+            "phase_default": "deploy",
+            "dataset_root": dataset_root,
+            "ckpt_dir": cate_ckpt,
+            "temporal_ensemble_coeff": "0.9",
+            "adaptive_te": True,
+            "stage_resampling": False,
+            "deploy_only": True,
+            "requires_adaptive_support": True,
+            "notes": "预测一致性驱动的自适应 temporal ensemble；方案一主方法。",
+        },
+    ]
 
 
 def select_experiments(args):
-    """根据命令行参数选择 FGDA TE deploy 实验。"""
+    """根据命令行参数选择 CATE 实验。"""
     matrix = experiment_matrix(args)
     if args.exp:
         wanted = set(args.exp)
         selected = [exp for exp in matrix if exp["id"] in wanted]
         missing = wanted - {exp["id"] for exp in selected}
         if missing:
-            raise SystemExit(f"Unknown CAC experiment id: {', '.join(sorted(missing))}")
+            raise SystemExit(f"Unknown CATE experiment id: {', '.join(sorted(missing))}")
     else:
-        selected = matrix
+        selected = [exp for exp in matrix if exp["suite"] == args.suite]
+
     return selected
 
 
 def list_experiments(args):
     for exp in experiment_matrix(args):
-        print(f"{exp['id']} ({exp['suite']}): {exp['notes']}")
+        tags = []
+        if exp.get("pending"):
+            tags.append("pending")
+        if exp.get("optional"):
+            tags.append("optional")
+        if exp.get("stage_resampling"):
+            tags.append("stage_resampling")
+        tag_text = f" [{' / '.join(tags)}]" if tags else ""
+        print(f"{exp['id']} ({exp['suite']}){tag_text}: {exp['notes']}")
 
 
-def ensure_supported(exp, dry_run):
-    """正式运行前确认底层 deploy 脚本支持当前 TE 参数。"""
+def phase_for(exp, requested_phase):
+    if requested_phase != "auto":
+        if exp.get("deploy_only") and requested_phase == "train":
+            return []
+        if exp.get("deploy_only") and requested_phase == "both":
+            return ["deploy"]
+        return ["train", "deploy"] if requested_phase == "both" else [requested_phase]
+    default_phase = exp.get("phase_default", "both")
+    return ["train", "deploy"] if default_phase == "both" else [default_phase]
+
+
+def ensure_supported(exp, phases, dry_run):
+    """正式运行前确认底层部署脚本支持对应能力。"""
     if dry_run:
         return
-    if exp.get("requires_no_ensemble_support") and not supports_deploy_no_ensemble():
+    if "deploy" in phases and exp.get("requires_no_ensemble_support") and not supports_deploy_no_ensemble():
         raise SystemExit(
             f"{exp['id']} needs {DEPLOY_SCRIPT} to support ACT_TEMPORAL_ENSEMBLE_COEFF=none before formal deploy."
         )
+    if "deploy" in phases and exp.get("requires_adaptive_support") and not supports_adaptive_temporal_ensemble():
+        raise SystemExit(f"{exp['id']} needs ACT_ADAPTIVE_TE support in {DEPLOY_SCRIPT} before formal deploy.")
 
 
-def ensure_dataset(exp, dry_run):
+def ensure_dataset(exp, phases, dry_run):
     if dry_run:
+        return
+    if "train" not in phases and "deploy" not in phases:
         return
     dataset_path = ROOT / exp["dataset_root"]
     if not dataset_path.exists():
         raise SystemExit(
             f"Dataset missing for {exp['id']}: {dataset_path}\n"
-            "Please collect/sync the dataset first, or pass --failure-guided-dataset."
+            "Please collect/sync the dataset first, or pass --dataset-root."
         )
 
 
-def ensure_checkpoint(exp, dry_run):
-    if dry_run:
+def ensure_checkpoint(exp, phases, dry_run):
+    if dry_run or "deploy" not in phases or "train" in phases:
         return
     ckpt_path = ROOT / exp["ckpt_dir"]
     if not ckpt_path.exists():
-        raise SystemExit(f"Checkpoint missing for deploy {exp['id']}: {ckpt_path}")
+        raise SystemExit(f"Checkpoint missing for deploy-only {exp['id']}: {ckpt_path}")
+
+
+def is_no_ensemble(exp):
+    return str(exp["temporal_ensemble_coeff"]).strip().lower() in {"none", "null"}
+
+
+def resolve_n_action_steps(exp, args):
+    """无集成默认执行完整 chunk；时间集成实验按 LeRobot 要求每步重预测。"""
+    if args.n_action_steps is not None:
+        return args.n_action_steps
+    if is_no_ensemble(exp):
+        return args.chunk_size
+    return 1
+
+
+def train_env(base_env, exp, args):
+    env = dict(base_env)
+    clean_proxy(env)
+    exp_dir = experiment_output_dir(exp)
+    env.update(
+        {
+            "PYTHONUNBUFFERED": "1",
+            "ACT_DATASET_ROOT": exp["dataset_root"],
+            "ACT_CKPT_DIR": exp["ckpt_dir"],
+            "ACT_CHUNK_SIZE": str(args.chunk_size),
+            "ACT_N_ACTION_STEPS": str(resolve_n_action_steps(exp, args)),
+            "ACT_LR": args.learning_rate,
+            "ACT_BATCH_SIZE": str(args.batch_size),
+            "ACT_NUM_WORKERS": str(args.num_workers),
+            "ACT_LOG_FREQ": str(args.log_freq),
+            "ACT_TRAINING_STEPS": str(args.training_steps),
+            "ACT_METRICS_PATH": str(exp_dir / "metrics" / "train.json"),
+        }
+    )
+    if exp.get("stage_resampling"):
+        env["ACT_STAGE_RESAMPLING"] = "1"
+    return env
 
 
 def deploy_env(base_env, exp, args, seed):
@@ -190,7 +295,7 @@ def deploy_env(base_env, exp, args, seed):
             "ACT_DATASET_ROOT": exp["dataset_root"],
             "ACT_CKPT_DIR": exp["ckpt_dir"],
             "ACT_CHUNK_SIZE": str(args.chunk_size),
-            "ACT_N_ACTION_STEPS": str(args.n_action_steps),
+            "ACT_N_ACTION_STEPS": str(resolve_n_action_steps(exp, args)),
             "ACT_TEMPORAL_ENSEMBLE_COEFF": str(exp["temporal_ensemble_coeff"]),
             "ACT_DEPLOY_MAX_STEPS": str(args.deploy_max_steps),
             "ACT_DEPLOY_SEED": str(seed),
@@ -201,6 +306,18 @@ def deploy_env(base_env, exp, args, seed):
             "ACT_FORCE_RELEASE_STREAK": str(DEFAULT_FORCE_RELEASE_STREAK),
         }
     )
+    if exp.get("adaptive_te"):
+        env.update(
+            {
+                "ACT_ADAPTIVE_TE": "1",
+                "ACT_ADAPTIVE_ALPHA_MIN": str(args.adaptive_alpha_min),
+                "ACT_ADAPTIVE_ALPHA_MAX": str(args.adaptive_alpha_max),
+                "ACT_ADAPTIVE_LAMBDA": str(args.adaptive_lambda),
+                "ACT_ADAPTIVE_WINDOW_SIZE": str(args.adaptive_window_size),
+            }
+        )
+    else:
+        env["ACT_ADAPTIVE_TE"] = "0"
     return env
 
 
@@ -211,6 +328,14 @@ def print_env_delta(env):
         "ACT_CHUNK_SIZE",
         "ACT_N_ACTION_STEPS",
         "ACT_TEMPORAL_ENSEMBLE_COEFF",
+        "ACT_ADAPTIVE_TE",
+        "ACT_ADAPTIVE_ALPHA_MIN",
+        "ACT_ADAPTIVE_ALPHA_MAX",
+        "ACT_ADAPTIVE_LAMBDA",
+        "ACT_ADAPTIVE_WINDOW_SIZE",
+        "ACT_STAGE_RESAMPLING",
+        "ACT_TRAINING_STEPS",
+        "ACT_METRICS_PATH",
         "ACT_DEPLOY_SEED",
         "ACT_VIDEO_DIR",
         "ACT_DEPLOY_METRICS_PATH",
@@ -280,8 +405,8 @@ def is_release_success(payload):
 
 def default_args_for_order():
     class Defaults:
-        ckpt_dir = DEFAULT_FGDA_CKPT
-        failure_guided_dataset = DEFAULT_FAILURE_GUIDED_DATASET
+        ckpt_dir = DEFAULT_CATE_CKPT
+        dataset_root = DEFAULT_BASELINE_DATASET
 
     return Defaults()
 
@@ -321,7 +446,7 @@ def summarize_experiment(exp, args):
         "temporal_ensemble_coeff": exp["temporal_ensemble_coeff"],
         "adaptive_te": int(bool(exp.get("adaptive_te"))),
         "stage_resampling": int(bool(exp.get("stage_resampling"))),
-        "steps": train_metrics.get("training_steps", "") if train_metrics else "",
+        "steps": train_metrics.get("training_steps", args.training_steps) if train_metrics else "",
         "mean_action_error": "" if not train_metrics else f"{train_metrics['mean_action_error']:.4f}",
         "final_loss": "" if not train_metrics else f"{train_metrics['final_loss']:.4f}",
         "success_rate": rate(deploy_payloads, "success"),
@@ -415,16 +540,15 @@ def upsert_seed_results(exp, metric_paths):
 
 
 def upsert_result(row):
-    current_order = {exp["id"]: idx for idx, exp in enumerate(experiment_matrix(default_args_for_order()))}
     rows = []
     if RESULTS_PATH.exists():
         with open(RESULTS_PATH, "r", encoding="utf-8", newline="") as f:
             rows = list(csv.DictReader(f))
 
-    # 汇总表只保留当前 FGDA TE sweep 矩阵，旧 CATE/训练实验行不再作为活跃结果保留。
-    rows = [old for old in rows if old.get("exp_id") in current_order and old.get("exp_id") != row["exp_id"]]
+    rows = [old for old in rows if old.get("exp_id") != row["exp_id"]]
     rows.append(row)
-    rows.sort(key=lambda item: current_order.get(item.get("exp_id"), 999))
+    order = {exp["id"]: idx for idx, exp in enumerate(experiment_matrix(default_args_for_order()))}
+    rows.sort(key=lambda item: order.get(item.get("exp_id"), 999))
 
     RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(RESULTS_PATH, "w", encoding="utf-8", newline="") as f:
@@ -444,34 +568,47 @@ def update_run_outputs(exp, args, updated_metric_paths):
 
 
 def run_one(exp, args):
-    ensure_supported(exp, args.dry_run)
-    ensure_dataset(exp, args.dry_run)
-    ensure_checkpoint(exp, args.dry_run)
+    phases = phase_for(exp, args.phase)
+    ensure_supported(exp, phases, args.dry_run)
+    ensure_dataset(exp, phases, args.dry_run)
+    ensure_checkpoint(exp, phases, args.dry_run)
 
     base_env = os.environ.copy()
     python_cmd = [sys.executable]
     updated_metric_paths = []
 
-    for seed in range(args.deploy_seed_start, args.deploy_seed_start + args.deploy_trials):
-        env = deploy_env(base_env, exp, args, seed)
-        metrics_path = Path(env["ACT_DEPLOY_METRICS_PATH"])
-        before_signature = file_signature(metrics_path)
+    if "train" in phases:
+        env = train_env(base_env, exp, args)
         code = run_command(
-            python_cmd + [DEPLOY_SCRIPT],
+            python_cmd + ["3.train.py"],
             env,
-            experiment_output_dir(exp) / "logs" / f"deploy_seed{seed}.log",
+            experiment_output_dir(exp) / "logs" / "train.log",
             args.dry_run,
         )
-        after_signature = file_signature(metrics_path)
-        if after_signature is not None and after_signature != before_signature:
-            updated_metric_paths.append(metrics_path)
         if code != 0:
-            print(f"deploy seed {seed} failed with exit code {code}")
-            if not args.continue_on_fail:
-                update_run_outputs(exp, args, updated_metric_paths)
-                raise SystemExit(code)
-        if seed + 1 < args.deploy_seed_start + args.deploy_trials and args.deploy_cooldown > 0:
-            time.sleep(args.deploy_cooldown)
+            raise SystemExit(code)
+
+    if "deploy" in phases:
+        for seed in range(args.deploy_seed_start, args.deploy_seed_start + args.deploy_trials):
+            env = deploy_env(base_env, exp, args, seed)
+            metrics_path = Path(env["ACT_DEPLOY_METRICS_PATH"])
+            before_signature = file_signature(metrics_path)
+            code = run_command(
+                python_cmd + [DEPLOY_SCRIPT],
+                env,
+                experiment_output_dir(exp) / "logs" / f"deploy_seed{seed}.log",
+                args.dry_run,
+            )
+            after_signature = file_signature(metrics_path)
+            if after_signature is not None and after_signature != before_signature:
+                updated_metric_paths.append(metrics_path)
+            if code != 0:
+                print(f"deploy seed {seed} failed with exit code {code}")
+                if not args.continue_on_fail:
+                    update_run_outputs(exp, args, updated_metric_paths)
+                    raise SystemExit(code)
+            if seed + 1 < args.deploy_seed_start + args.deploy_trials and args.deploy_cooldown > 0:
+                time.sleep(args.deploy_cooldown)
 
     update_run_outputs(exp, args, updated_metric_paths)
 
@@ -484,17 +621,28 @@ def summarize_only(exps, args):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run FGDA checkpoint deploy sweep across TE coefficients.")
-    parser.add_argument("--list", action="store_true", help="List CAC paper experiment matrix and exit.")
+    parser = argparse.ArgumentParser(description="Run CATE adaptive temporal ensemble experiments.")
+    parser.add_argument("--list", action="store_true", help="List CATE experiment matrix and exit.")
+    parser.add_argument("--suite", choices=["cate"], default="cate")
     parser.add_argument("--exp", nargs="+", help="Specific experiment ids to run.")
-    parser.add_argument("--failure-guided-dataset", default=DEFAULT_FAILURE_GUIDED_DATASET)
-    parser.add_argument("--ckpt-dir", default=DEFAULT_FGDA_CKPT, help="Finetuned FGDA checkpoint used for deploy.")
+    parser.add_argument("--phase", choices=["auto", "train", "deploy", "both"], default="auto")
+    parser.add_argument("--dataset-root", default=DEFAULT_BASELINE_DATASET)
+    parser.add_argument("--ckpt-dir", default=DEFAULT_CATE_CKPT, help="Checkpoint used by CATE deploy-only experiments.")
+    parser.add_argument("--training-steps", type=int, default=6000)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--chunk-size", type=int, default=50)
-    parser.add_argument("--n-action-steps", type=int, default=1)
-    parser.add_argument("--deploy-trials", type=int, default=20)
-    parser.add_argument("--deploy-seed-start", type=int, default=1)
+    parser.add_argument("--n-action-steps", type=int, default=None)
+    parser.add_argument("--learning-rate", default="1e-4")
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--log-freq", type=int, default=500)
+    parser.add_argument("--deploy-trials", type=int, default=2)
+    parser.add_argument("--deploy-seed-start", type=int, default=7)
     parser.add_argument("--deploy-max-steps", type=int, default=500)
     parser.add_argument("--deploy-cooldown", type=float, default=2.0)
+    parser.add_argument("--adaptive-alpha-min", type=float, default=0.01)
+    parser.add_argument("--adaptive-alpha-max", type=float, default=0.30)
+    parser.add_argument("--adaptive-lambda", type=float, default=2.0)
+    parser.add_argument("--adaptive-window-size", type=int, default=10)
     parser.add_argument("--continue-on-fail", action="store_true")
     parser.add_argument("--summarize-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -509,7 +657,7 @@ def main():
 
     selected = select_experiments(args)
     if not selected:
-        print("No CAC experiments selected.")
+        print("No CATE experiments selected.")
         return
     if args.summarize_only:
         summarize_only(selected, args)

@@ -28,4 +28,9 @@ Recent history uses a mix of Conventional Commit style, such as `docs:` and `cho
 
 ## Agent-Specific Instructions
 
-先给结论，再给依据。解释概念时优先用第一性原理。新增代码时加适当中文注释，并在行为或入口变化时同步更新对应 README 或 `docs/` 文档。
+<INSTRUCTIONS>
+- 解释概念时用第一性原理
+- 先给结论，再给依据
+- 优先小改，不做大重构
+- 新增代码加中文注释；同时更新对应的 readme 文档
+</INSTRUCTIONS>

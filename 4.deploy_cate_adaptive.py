@@ -23,7 +23,7 @@ CKPT_DIR = os.environ.get("ACT_CKPT_DIR", "./ckpt/v5")
 XML_PATH = os.environ.get("ACT_XML_PATH", "./mode/demo_scene.xml")
 OUTPUT_DIR = os.environ.get("ACT_VIDEO_DIR", "./videos")
 RECORD_VIDEO = os.environ.get("ACT_RECORD_VIDEO", "1") == "1"
-MAX_STEPS = int(os.environ.get("ACT_DEPLOY_MAX_STEPS", "400"))  # 最大部署步数 400
+MAX_STEPS = int(os.environ.get("ACT_DEPLOY_MAX_STEPS", "450"))  # 最大部署步数 400
 DEPLOY_SEED = int(os.environ.get("ACT_DEPLOY_SEED", "3"))
 CHUNK_SIZE = int(os.environ.get("ACT_CHUNK_SIZE", "50"))
 N_ACTION_STEPS = int(os.environ.get("ACT_N_ACTION_STEPS", "1"))
@@ -33,10 +33,12 @@ PLACEMENT_Z_THRESHOLD = float(os.environ.get("ACT_PLACEMENT_Z_THRESHOLD", "0.08"
 FORCE_RELEASE_ON_PLACEMENT = os.environ.get("ACT_FORCE_RELEASE_ON_PLACEMENT", "1") == "1"
 FORCE_RELEASE_STREAK = int(os.environ.get("ACT_FORCE_RELEASE_STREAK", "3"))
 ADAPTIVE_TE = os.environ.get("ACT_ADAPTIVE_TE", "1") == "1"
-ADAPTIVE_ALPHA_MIN = float(os.environ.get("ACT_ADAPTIVE_ALPHA_MIN", "0.5"))
-ADAPTIVE_ALPHA_MAX = float(os.environ.get("ACT_ADAPTIVE_ALPHA_MAX", "0.95"))
-ADAPTIVE_LAMBDA = float(os.environ.get("ACT_ADAPTIVE_LAMBDA", "10.0"))
-ADAPTIVE_WINDOW_SIZE = int(os.environ.get("ACT_ADAPTIVE_WINDOW_SIZE", "50"))
+ADAPTIVE_ALPHA_MAX = float(os.environ.get("ACT_ADAPTIVE_ALPHA_MAX", "0.30"))
+ADAPTIVE_GAMMA_MAX = float(os.environ.get("ACT_ADAPTIVE_GAMMA_MAX", str(ADAPTIVE_ALPHA_MAX)))
+ADAPTIVE_LAMBDA = float(os.environ.get("ACT_ADAPTIVE_LAMBDA", "2.0"))
+ADAPTIVE_WINDOW_SIZE = int(os.environ.get("ACT_ADAPTIVE_WINDOW_SIZE", "10"))
+ADAPTIVE_DEBUG = os.environ.get("ACT_ADAPTIVE_DEBUG", "0") == "1"
+ADAPTIVE_DEBUG_INTERVAL = max(1, int(os.environ.get("ACT_ADAPTIVE_DEBUG_INTERVAL", "20")))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -111,21 +113,27 @@ def infer_failure_mode(success, final_task_metrics, current_failure_mode):
     return current_failure_mode
 
 
-def compute_adaptive_temporal_ensemble(actions, step, chunk_history):
+def compute_adaptive_temporal_ensemble(actions, step, chunk_history, is_new_chunk=True):
     """根据历史 action chunk 的预测一致性自适应计算当前动作。"""
     chunk = actions[0].detach().cpu().numpy()
-    chunk_history.append((step, chunk.copy()))
-    chunk_history[:] = [
-        (start_step, old_chunk)
-        for start_step, old_chunk in chunk_history
-        if 0 <= step - start_step < old_chunk.shape[0]
-    ][-ADAPTIVE_WINDOW_SIZE:]
+    if is_new_chunk:
+        # 只有 policy 真的重新推理出 chunk 时才写入历史，避免复用旧 chunk 污染时间索引。
+        chunk_history.append((step, chunk.copy()))
+
+    valid_history = []
+    for start_step, old_chunk in chunk_history:
+        offset = step - start_step
+        if 0 <= offset < old_chunk.shape[0]:
+            valid_history.append((start_step, old_chunk))
+    chunk_history[:] = valid_history[-ADAPTIVE_WINDOW_SIZE:]
 
     current_predictions = []
+    offsets = []
     for start_step, old_chunk in chunk_history:
         offset = step - start_step
         if 0 <= offset < old_chunk.shape[0]:
             current_predictions.append(old_chunk[offset])
+            offsets.append(offset)
 
     if not current_predictions:
         return chunk[0], None, None
@@ -137,15 +145,34 @@ def compute_adaptive_temporal_ensemble(actions, step, chunk_history):
     mean_action = np.mean(stacked, axis=0)
     prediction_inconsistency = float(np.mean(np.linalg.norm(stacked - mean_action, axis=1)))
     confidence = float(np.exp(-ADAPTIVE_LAMBDA * prediction_inconsistency))
-    alpha = ADAPTIVE_ALPHA_MIN + confidence * (ADAPTIVE_ALPHA_MAX - ADAPTIVE_ALPHA_MIN)
-    alpha = float(np.clip(alpha, ADAPTIVE_ALPHA_MIN, ADAPTIVE_ALPHA_MAX))
+    confidence = float(np.clip(confidence, 0.0, 1.0))
 
-    # 越新的 chunk 权重越大；alpha 越高，历史预测保留越多。
-    ages = np.arange(len(current_predictions) - 1, -1, -1, dtype=np.float32)
-    weights = np.power(alpha, ages)
+    # gamma 为正时偏向旧规划，为负时偏向新预测；softmax 保证权重单调过渡。
+    k = len(current_predictions)
+    ages = np.arange(k, dtype=np.float32)
+    gamma = (2.0 * confidence - 1.0) * ADAPTIVE_GAMMA_MAX
+    logits = -gamma * ages
+    logits = logits - np.max(logits)
+    weights = np.exp(logits)
     weights = weights / np.sum(weights)
     action = np.sum(stacked * weights[:, None], axis=0)
-    return action, prediction_inconsistency, alpha
+
+    if ADAPTIVE_DEBUG and step % ADAPTIVE_DEBUG_INTERVAL == 0:
+        print(
+            f"step={step}, "
+            f"K={k}, "
+            f"offsets={offsets}, "
+            f"inconsistency={prediction_inconsistency:.4f}, "
+            f"confidence={confidence:.4f}, "
+            f"gamma={gamma:.4f}, "
+            f"w_oldest={weights[0]:.4f}, "
+            f"w_newest={weights[-1]:.4f}, "
+            f"action_norm={np.linalg.norm(action):.4f}, "
+            f"chunk0_norm={np.linalg.norm(chunk[0]):.4f}, "
+            f"diff_to_chunk0={np.linalg.norm(action - chunk[0]):.4f}"
+        )
+
+    return action, prediction_inconsistency, gamma
 
 
 def select_action_and_measure(policy, data, step, chunk_history):
@@ -157,7 +184,7 @@ def select_action_and_measure(policy, data, step, chunk_history):
     with torch.no_grad():
         actions = policy.predict_action_chunk(data)
         if ADAPTIVE_TE:
-            return compute_adaptive_temporal_ensemble(actions, step, chunk_history)
+            return compute_adaptive_temporal_ensemble(actions, step, chunk_history, is_new_chunk=True)
 
         chunk = actions[0].detach().cpu().numpy()
         chunk_history.append((step, chunk.copy()))
@@ -188,7 +215,7 @@ def build_eval_metrics(
     initial_task_metrics,
     action_deltas,
     prediction_inconsistencies,
-    adaptive_alphas,
+    adaptive_gammas,
     trajectory_metrics,
     release_latched,
     release_trigger_step,
@@ -211,9 +238,13 @@ def build_eval_metrics(
         "action_smoothness_max": max_or_none(action_deltas),
         "prediction_inconsistency_mean": mean_or_none(prediction_inconsistencies),
         "prediction_inconsistency_max": max_or_none(prediction_inconsistencies),
-        "adaptive_alpha_mean": mean_or_none(adaptive_alphas),
-        "adaptive_alpha_min_observed": min(adaptive_alphas) if adaptive_alphas else None,
-        "adaptive_alpha_max_observed": max(adaptive_alphas) if adaptive_alphas else None,
+        "adaptive_gamma_mean": mean_or_none(adaptive_gammas),
+        "adaptive_gamma_min_observed": min(adaptive_gammas) if adaptive_gammas else None,
+        "adaptive_gamma_max_observed": max(adaptive_gammas) if adaptive_gammas else None,
+        # 兼容旧汇总脚本；当前值语义已经是带符号 gamma，而不是无符号 alpha。
+        "adaptive_alpha_mean": mean_or_none(adaptive_gammas),
+        "adaptive_alpha_min_observed": min(adaptive_gammas) if adaptive_gammas else None,
+        "adaptive_alpha_max_observed": max(adaptive_gammas) if adaptive_gammas else None,
         "final_mug_plate_xy_dist": final_task_metrics.get("mug_plate_xy_dist"),
         "min_mug_plate_xy_dist": min(xy_dists) if xy_dists else final_task_metrics.get("mug_plate_xy_dist"),
         "final_mug_plate_z_gap": final_task_metrics.get("mug_plate_z_gap"),
@@ -265,10 +296,13 @@ def write_deploy_metrics(metrics_path, video_path, step, success, failure_mode, 
         "n_action_steps": N_ACTION_STEPS,
         "temporal_ensemble_coeff": TEMPORAL_ENSEMBLE_COEFF,
         "adaptive_te": ADAPTIVE_TE,
-        "adaptive_alpha_min": ADAPTIVE_ALPHA_MIN,
+        "adaptive_alpha_min": None,
         "adaptive_alpha_max": ADAPTIVE_ALPHA_MAX,
+        "adaptive_gamma_max": ADAPTIVE_GAMMA_MAX,
         "adaptive_lambda": ADAPTIVE_LAMBDA,
         "adaptive_window_size": ADAPTIVE_WINDOW_SIZE,
+        "adaptive_debug": ADAPTIVE_DEBUG,
+        "adaptive_debug_interval": ADAPTIVE_DEBUG_INTERVAL,
         "placement_xy_threshold": PLACEMENT_XY_THRESHOLD,
         "placement_z_threshold": PLACEMENT_Z_THRESHOLD,
         "device": DEVICE,
@@ -298,10 +332,11 @@ def main():
     print(f"temporal_ensemble_coeff: {TEMPORAL_ENSEMBLE_COEFF}")
     print(f"adaptive_te: {ADAPTIVE_TE}")
     if ADAPTIVE_TE:
-        print(f"adaptive_alpha_min: {ADAPTIVE_ALPHA_MIN}")
-        print(f"adaptive_alpha_max: {ADAPTIVE_ALPHA_MAX}")
+        print(f"adaptive_alpha_max_legacy: {ADAPTIVE_ALPHA_MAX}")
+        print(f"adaptive_gamma_max: {ADAPTIVE_GAMMA_MAX}")
         print(f"adaptive_lambda: {ADAPTIVE_LAMBDA}")
         print(f"adaptive_window_size: {ADAPTIVE_WINDOW_SIZE}")
+        print(f"adaptive_debug: {ADAPTIVE_DEBUG}")
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -318,7 +353,7 @@ def main():
     initial_task_metrics = {}
     action_deltas = []
     prediction_inconsistencies = []
-    adaptive_alphas = []
+    adaptive_gammas = []
     trajectory_metrics = []
     chunk_history = []
     prev_action = None
@@ -368,11 +403,11 @@ def main():
                 "timestamp": torch.tensor([step / 20]).to(DEVICE),
             }
 
-            action, prediction_inconsistency, adaptive_alpha = select_action_and_measure(policy, data, step, chunk_history)
+            action, prediction_inconsistency, adaptive_gamma = select_action_and_measure(policy, data, step, chunk_history)
             if prediction_inconsistency is not None:
                 prediction_inconsistencies.append(prediction_inconsistency)
-            if adaptive_alpha is not None:
-                adaptive_alphas.append(adaptive_alpha)
+            if adaptive_gamma is not None:
+                adaptive_gammas.append(adaptive_gamma)
             if prev_action is not None:
                 action_deltas.append(float(np.linalg.norm(action - prev_action)))
             action, release_latched, release_forced_this_step = maybe_force_release(
@@ -416,7 +451,7 @@ def main():
             initial_task_metrics,
             action_deltas,
             prediction_inconsistencies,
-            adaptive_alphas,
+            adaptive_gammas,
             trajectory_metrics,
             release_latched,
             release_trigger_step,

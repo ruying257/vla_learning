@@ -36,6 +36,7 @@ demo_data/
 demo_data*/
 videos/
 wandb/
+failure_seed_data/
 
 # 模型检查点
 ckpt/
@@ -53,6 +54,11 @@ Thumbs.db
 *.tmp
 *.bak
 *.log
+
+# 实验数据
+experiments/
+
+
 
 # for myself
 archive/

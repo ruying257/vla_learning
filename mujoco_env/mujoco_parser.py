@@ -787,7 +787,8 @@ class MuJoCoParserClass(object):
             
         # Print
         if self.verbose:
-            self.print_info()
+            pass
+            # self.print_info()
             
         # Reset
         self.reset(step=True)

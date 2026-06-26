@@ -1,12 +1,12 @@
 ﻿# CAC ACT 论文实验脚本说明
 
-本文档说明 `scripts/run_cac_paper_experiments.py` 的实验矩阵和运行方式。文档与脚本只负责编排实验，不实现新的 ACT 模型结构。
+本文档说明 `scripts/run_cac_paper_experiments.py` 的实验矩阵和运行方式。该脚本只负责使用已训练好的 checkpoint 做 deploy sweep，不再负责训练。
 
 ## 结论先行
 
-- CATE 实验用于比较时间集成策略，必须包含原始 ACT 无时间集成对照。
-- FGDA 实验以 `datasets/demo_v5_30demos_random` 为 baseline，主结论来自 `FGDA_E0 -> FGDA_E2 -> FGDA_E3`。
-- 当前脚本会保护尚未实现的能力：如果 `4.deploy.py` 不支持关闭 temporal ensemble 或自适应时间集成，对应实验不会正式运行；如果 `3.train.py` 不支持关键阶段重采样，`FGDA_E3` 不会正式训练。
+- 训练由 `3.train_finetune.py` 独立完成，runner 只做 deploy。
+- 当前实验设计是在 FGDA 新训练 checkpoint 上比较不同 temporal ensemble 参数。
+- 保留 `none` 作为无 temporal ensemble 对照；不再包含 Consistency-Aware Temporal Ensemble 或关键阶段重采样实验。
 
 ## 快速命令
 
@@ -16,59 +16,51 @@
 python scripts/run_cac_paper_experiments.py --list
 ```
 
-只打印 CATE 命令，不启动 MuJoCo：
+只打印 deploy 命令，不启动 MuJoCo：
 
 ```bash
-python scripts/run_cac_paper_experiments.py --suite cate --dry-run
+python scripts/run_cac_paper_experiments.py --dry-run
 ```
 
-只运行无 temporal ensemble 对照：
+用默认 FGDA checkpoint 跑 5 个 seed：
 
 ```bash
-python scripts/run_no_temporal_ensemble_experiment.py --deploy-seed-start 1 --deploy-trials 1
+python scripts/run_cac_paper_experiments.py --deploy-seed-start 1 --deploy-trials 5
 ```
 
-只打印 FGDA 命令，不启动训练或 MuJoCo：
+如果 FGDA checkpoint 或数据集路径不同：
 
 ```bash
-python scripts/run_cac_paper_experiments.py --suite fgda --dry-run
+python scripts/run_cac_paper_experiments.py \
+  --ckpt-dir ckpt/v5_finetune_new_data \
+  --failure-guided-dataset failure_seed_data
 ```
 
-运行 FGDA 主实验：
+如果批量 deploy 中某些 seed 因 MuJoCo 初始化异常失败，可以只补跑指定 seed：
 
 ```bash
-python scripts/run_cac_paper_experiments.py --suite fgda --phase both --deploy-trials 5
+python scripts/rerun_cac_deploy_seeds.py --exp FGDA_TE_090 --deploy-seeds 3
+python scripts/rerun_cac_deploy_seeds.py --exp FGDA_TE_090 --deploy-seeds 3,7,11 --continue-on-fail
+python scripts/rerun_cac_deploy_seeds.py --exp FGDA_TE_001 FGDA_TE_090 --deploy-seeds 3 --dry-run
 ```
 
-如果失败补数据数据集路径不同：
+补跑脚本要求显式传 `--exp`，只运行 deploy；成功写出 metrics 的 seed 会增量更新对应实验目录下的 `seed_results.csv`，并刷新全局 `results.csv`。
 
-```bash
-python scripts/run_cac_paper_experiments.py --suite fgda --failure-guided-dataset datasets/your_dataset
-```
-
-## CATE 实验矩阵
+## FGDA TE 实验矩阵
 
 | 实验 | 含义 | 当前状态 |
 | --- | --- | --- |
-| `CATE_E0_no_ensemble` | 原始 ACT，无时间集成 | 通过 `ACT_TEMPORAL_ENSEMBLE_COEFF=none` 关闭时间集成 |
-| `CATE_E1b_fixed_03` | 固定时间集成，系数 0.3 | 可编排 |
-| `CATE_E1_fixed_07` | 固定时间集成，系数 0.7 | 可编排 |
-| `CATE_E2_fixed_09` | 固定时间集成，系数 0.9 | 可编排 |
-| `CATE_E3_adaptive_pending` | 自适应时间集成 | pending，需要后续接入 `ACT_ADAPTIVE_TE` |
+| `FGDA_TE_none` | 无 temporal ensemble | 验证 TE-off 对照 |
+| `FGDA_TE_001` | 固定时间集成，系数 0.01 | 接近原始 ACT 推荐的轻量平滑 |
+| `FGDA_TE_005` | 固定时间集成，系数 0.05 | 轻平滑 sweep |
+| `FGDA_TE_010` | 固定时间集成，系数 0.10 | 中低强度平滑 |
+| `FGDA_TE_015` | 固定时间集成，系数 0.15 | 细化 0.10 到 0.30 区间 |
+| `FGDA_TE_020` | 固定时间集成，系数 0.20 | 细化 0.10 到 0.30 区间 |
+| `FGDA_TE_030` | 固定时间集成，系数 0.30 | 低系数 sweep 上界 |
+| `FGDA_TE_070` | 固定时间集成，系数 0.70 | 强平滑对照 |
+| `FGDA_TE_090` | 固定时间集成，系数 0.90 | 当前强平滑基线 |
 
-CATE 默认使用 `./ckpt/act_y`，可通过 `--ckpt-dir` 覆盖。
-
-`scripts/run_no_temporal_ensemble_experiment.py` 是 `CATE_E0_no_ensemble` 的专用入口。它固定 `ACT_TEMPORAL_ENSEMBLE_COEFF=none`，并默认令 `ACT_N_ACTION_STEPS=ACT_CHUNK_SIZE`，让无集成对照按完整 action chunk 执行；如需测试更短动作片段，可显式传 `--n-action-steps` 覆盖。
-
-## FGDA 实验矩阵
-
-| 实验 | 数据策略 | 论文作用 |
-| --- | --- | --- |
-| `FGDA_E0_v5_baseline` | `datasets/demo_v5_30demos_random` | 原始 baseline |
-| `FGDA_E2_failure_guided` | `datasets/demo_v6_failure_guided` | 验证失败案例补数据效果 |
-| `FGDA_E3_failure_guided_resampled` | 同 E2 数据集 + `ACT_STAGE_RESAMPLING=1` | 验证补数据 + 关键阶段重采样效果 |
-
-`FGDA_E1_v5_extra_random_optional` 是普通补随机数据的可选对照，不进入主论文结论。需要时加 `--include-optional`。
+默认 checkpoint 为 `./ckpt/v5_finetune_new_data`，默认数据集标识为 `failure_seed_data`，均可通过命令行覆盖。
 
 ## 输出文件
 
@@ -80,8 +72,8 @@ experiments/cac_act_paper/
 
 主要文件包括：
 
-- `<exp_id>/logs/`：单个实验的训练和部署日志。
-- `<exp_id>/metrics/`：单个实验的训练指标和每个 seed 的部署指标。
+- `<exp_id>/logs/`：单个实验的部署日志。
+- `<exp_id>/metrics/`：单个实验内每个 seed 的部署指标。
 - `<exp_id>/videos/`：单个实验的部署视频。
 - `<exp_id>/seed_results.csv`：单个实验内按 seed 增量汇总的关键部署指标。
 - `results.csv`：所有实验共享的论文实验汇总表。
@@ -89,7 +81,7 @@ experiments/cac_act_paper/
 示例结构：
 
 ```text
-experiments/cac_act_paper/CATE_E2_fixed_09/
+experiments/cac_act_paper/FGDA_TE_090/
   logs/
     deploy_seed1.log
   metrics/
@@ -109,6 +101,8 @@ prediction_inconsistency_mean / final_mug_plate_xy_dist /
 min_mug_plate_xy_dist / failure_mode / video_path / notes
 ```
 
+`adaptive_te` 和 `stage_resampling` 是兼容旧表格的保留列；当前 FGDA TE sweep 中两列均为 `0`。
+
 `seed_results.csv` 每一行对应一个 deploy seed，字段包含：
 
 ```text
@@ -123,6 +117,6 @@ prediction_inconsistency_max
 
 ## 论文表述边界
 
-- 在 `CATE_E3_adaptive_pending` 未真正接入部署逻辑前，不要声称已经完成自适应时间集成实验。
-- 在 `FGDA_E3_failure_guided_resampled` 未真正接入采样器前，不要声称已经完成关键阶段重采样实验。
-- FGDA 主对比应写成：原始 v5 baseline、失败案例补数据、失败案例补数据 + 关键阶段重采样。
+- 当前 runner 不再执行训练；训练过程和 WandB 记录应引用 `3.train_finetune.py`。
+- 当前 runner 不包含 Consistency-Aware Temporal Ensemble 或关键阶段重采样实验。
+- FGDA deploy 结论应写成：同一个失败引导微调 checkpoint 在不同 temporal ensemble 参数下的闭环表现对比。

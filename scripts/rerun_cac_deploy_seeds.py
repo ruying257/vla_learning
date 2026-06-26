@@ -1,4 +1,4 @@
-﻿# 运行 FGDA checkpoint 的 TE deploy sweep
+﻿# 按指定 seed 补跑 CAC deploy 实验(跑None TE实验有问题，卡着不动)
 
 import argparse
 import csv
@@ -30,6 +30,9 @@ TE_SWEEP = [
     ("FGDA_TE_070", "0.70", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.70。"),
     ("FGDA_TE_090", "0.90", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.90。"),
 ]
+
+# 在这里修改默认补跑 seed；命令行 --deploy-seeds 会覆盖该默认值
+DEFAULT_DEPLOY_SEEDS = [1, 4, 7, 8, 11, 13, 15]
 
 RESULT_FIELDS = [
     "exp_id",
@@ -151,18 +154,20 @@ def list_experiments(args):
         print(f"{exp['id']} ({exp['suite']}): {exp['notes']}")
 
 
-def ensure_supported(exp, dry_run):
-    """正式运行前确认底层 deploy 脚本支持当前 TE 参数。"""
+def ensure_supported(exp, phases, dry_run):
+    """pending 能 dry-run 展示命令，但正式运行前必须确认底层脚本支持。"""
     if dry_run:
         return
-    if exp.get("requires_no_ensemble_support") and not supports_deploy_no_ensemble():
+    if "deploy" in phases and exp.get("requires_no_ensemble_support") and not supports_deploy_no_ensemble():
         raise SystemExit(
             f"{exp['id']} needs {DEPLOY_SCRIPT} to support ACT_TEMPORAL_ENSEMBLE_COEFF=none before formal deploy."
         )
 
 
-def ensure_dataset(exp, dry_run):
+def ensure_dataset(exp, phases, dry_run):
     if dry_run:
+        return
+    if "train" not in phases and "deploy" not in phases:
         return
     dataset_path = ROOT / exp["dataset_root"]
     if not dataset_path.exists():
@@ -172,12 +177,12 @@ def ensure_dataset(exp, dry_run):
         )
 
 
-def ensure_checkpoint(exp, dry_run):
-    if dry_run:
+def ensure_checkpoint(exp, phases, dry_run):
+    if dry_run or "deploy" not in phases or "train" in phases:
         return
     ckpt_path = ROOT / exp["ckpt_dir"]
     if not ckpt_path.exists():
-        raise SystemExit(f"Checkpoint missing for deploy {exp['id']}: {ckpt_path}")
+        raise SystemExit(f"Checkpoint missing for deploy-only {exp['id']}: {ckpt_path}")
 
 
 def deploy_env(base_env, exp, args, seed):
@@ -415,16 +420,15 @@ def upsert_seed_results(exp, metric_paths):
 
 
 def upsert_result(row):
-    current_order = {exp["id"]: idx for idx, exp in enumerate(experiment_matrix(default_args_for_order()))}
     rows = []
     if RESULTS_PATH.exists():
         with open(RESULTS_PATH, "r", encoding="utf-8", newline="") as f:
             rows = list(csv.DictReader(f))
 
-    # 汇总表只保留当前 FGDA TE sweep 矩阵，旧 CATE/训练实验行不再作为活跃结果保留。
-    rows = [old for old in rows if old.get("exp_id") in current_order and old.get("exp_id") != row["exp_id"]]
+    rows = [old for old in rows if old.get("exp_id") != row["exp_id"]]
     rows.append(row)
-    rows.sort(key=lambda item: current_order.get(item.get("exp_id"), 999))
+    order = {exp["id"]: idx for idx, exp in enumerate(experiment_matrix(default_args_for_order()))}
+    rows.sort(key=lambda item: order.get(item.get("exp_id"), 999))
 
     RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(RESULTS_PATH, "w", encoding="utf-8", newline="") as f:
@@ -444,15 +448,16 @@ def update_run_outputs(exp, args, updated_metric_paths):
 
 
 def run_one(exp, args):
-    ensure_supported(exp, args.dry_run)
-    ensure_dataset(exp, args.dry_run)
-    ensure_checkpoint(exp, args.dry_run)
+    phases = ["deploy"]
+    ensure_supported(exp, phases, args.dry_run)
+    ensure_dataset(exp, phases, args.dry_run)
+    ensure_checkpoint(exp, phases, args.dry_run)
 
     base_env = os.environ.copy()
     python_cmd = [sys.executable]
     updated_metric_paths = []
 
-    for seed in range(args.deploy_seed_start, args.deploy_seed_start + args.deploy_trials):
+    for seed_index, seed in enumerate(args.deploy_seeds):
         env = deploy_env(base_env, exp, args, seed)
         metrics_path = Path(env["ACT_DEPLOY_METRICS_PATH"])
         before_signature = file_signature(metrics_path)
@@ -470,7 +475,7 @@ def run_one(exp, args):
             if not args.continue_on_fail:
                 update_run_outputs(exp, args, updated_metric_paths)
                 raise SystemExit(code)
-        if seed + 1 < args.deploy_seed_start + args.deploy_trials and args.deploy_cooldown > 0:
+        if seed_index + 1 < len(args.deploy_seeds) and args.deploy_cooldown > 0:
             time.sleep(args.deploy_cooldown)
 
     update_run_outputs(exp, args, updated_metric_paths)
@@ -483,22 +488,39 @@ def summarize_only(exps, args):
     print("seed_results.csv is only incrementally updated after deploy writes metrics.")
 
 
+def parse_seed_list(seed_text):
+    """解析逗号分隔的 deploy seed 列表，例如 3 或 3,7,11。"""
+    try:
+        seeds = [int(seed.strip()) for seed in seed_text.split(",") if seed.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("--deploy-seeds 只支持整数或逗号分隔的整数列表") from exc
+    if not seeds:
+        raise argparse.ArgumentTypeError("--deploy-seeds 至少需要指定一个整数 seed")
+    return seeds
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run FGDA checkpoint deploy sweep across TE coefficients.")
+    parser = argparse.ArgumentParser(description="Rerun CAC deploy for explicit experiment ids and seed list.")
     parser.add_argument("--list", action="store_true", help="List CAC paper experiment matrix and exit.")
-    parser.add_argument("--exp", nargs="+", help="Specific experiment ids to run.")
+    parser.add_argument("--exp", nargs="+", help="Required experiment ids to rerun, for example FGDA_TE_090.")
     parser.add_argument("--failure-guided-dataset", default=DEFAULT_FAILURE_GUIDED_DATASET)
     parser.add_argument("--ckpt-dir", default=DEFAULT_FGDA_CKPT, help="Finetuned FGDA checkpoint used for deploy.")
     parser.add_argument("--chunk-size", type=int, default=50)
     parser.add_argument("--n-action-steps", type=int, default=1)
-    parser.add_argument("--deploy-trials", type=int, default=20)
-    parser.add_argument("--deploy-seed-start", type=int, default=1)
+    parser.add_argument(
+        "--deploy-seeds",
+        type=parse_seed_list,
+        default=DEFAULT_DEPLOY_SEEDS,
+        help="Seed list to rerun, for example 3 or 3,7,11.",
+    )
     parser.add_argument("--deploy-max-steps", type=int, default=500)
     parser.add_argument("--deploy-cooldown", type=float, default=2.0)
     parser.add_argument("--continue-on-fail", action="store_true")
-    parser.add_argument("--summarize-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.list and not args.exp:
+        parser.error("--exp is required when rerunning deploy seeds")
+    return args
 
 
 def main():
@@ -511,12 +533,10 @@ def main():
     if not selected:
         print("No CAC experiments selected.")
         return
-    if args.summarize_only:
-        summarize_only(selected, args)
-        return
 
     for exp in selected:
         print(f"===== {exp['id']} ({exp['suite']}) =====")
+        print(f"rerun deploy seeds: {args.deploy_seeds}")
         run_one(exp, args)
 
     if not args.dry_run:
