@@ -32,7 +32,7 @@ vla/
 ├── 2.visualize_data.py        # 数据可视化脚本
 ├── 3.train.py                 # 模型训练脚本
 ├── 3.train_finetune.py        # 基于已有 checkpoint 续训脚本
-├── 4.deploy.py                # 策略部署脚本
+├── deploy.py                  # 策略部署脚本
 ├── KeyControl.py              # 键盘控制模块
 ├── LoadMode.py                # 模型加载模块
 ├── OpenDemo.py                # 演示模块
@@ -153,7 +153,7 @@ python 3.train_finetune.py
 ### 4. 部署策略
 
 ```bash
-python 4.deploy.py
+python deploy.py
 ```
 
 加载训练好的模型，在仿真环境中自主运行。

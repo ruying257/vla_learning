@@ -2,17 +2,16 @@
 
 ## Project Structure & Module Organization
 
-This repository is a Python robotics learning project built around MuJoCo, LeRobot, and ACT policy training. The top-level numbered scripts define the main workflow: `1.collect_data.py`, `2.visualize_data.py`, `3.train.py`, `4.deploy.py`, and `4.deploy_headless.py`. Core simulation and robot utilities live in `mujoco_env/`. MuJoCo XML models, meshes, and object assets live in `mode/`; visual README assets live in `assets/`; datasets and generated runs are under `datasets/`, `ckpt/`, `videos/`, and `exp_log/`. Experiment orchestration and summaries live in `scripts/`, with operating notes in `docs/`.
+This repository is a Python robotics learning project built around MuJoCo, LeRobot, and ACT policy training. The top-level scripts define the main workflow: `1.collect_data.py`, `2.visualize_data.py`, `3.train.py`, and `deploy.py`. Core simulation and robot utilities live in `mujoco_env/`. MuJoCo XML models, meshes, and object assets live in `mode/`; visual README assets live in `assets/`; datasets and generated runs are under `datasets/`, `ckpt/`, `videos/`, and `exp_log/`. Experiment orchestration and summaries live in `scripts/`, with operating notes in `docs/`.
 
 ## Build, Test, and Development Commands
 
 - `pip install -r requirements.txt`: install the pinned runtime dependencies.
-- `python -m py_compile 1.collect_data.py 2.visualize_data.py 3.train.py 4.deploy.py 4.deploy_headless.py`: quick syntax check for the primary entry points.
+- `python -m py_compile 1.collect_data.py 2.visualize_data.py 3.train.py deploy.py`: quick syntax check for the primary entry points.
 - `python 1.collect_data.py`: collect keyboard teleoperation demonstrations.
 - `python 2.visualize_data.py`: replay collected demonstrations.
 - `python 3.train.py`: train the ACT policy and write checkpoints.
-- `python 4.deploy.py`: run policy deployment with viewer support.
-- `ACT_RECORD_VIDEO=1 ACT_DEPLOY_MAX_STEPS=300 python 4.deploy_headless.py`: run headless deployment for server or WSL usage.
+- `python deploy.py`: run policy deployment with viewer support.
 
 ## Coding Style & Naming Conventions
 

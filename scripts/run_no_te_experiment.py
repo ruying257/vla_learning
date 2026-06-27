@@ -3,7 +3,7 @@
 import argparse
 from types import SimpleNamespace
 
-import run_cac_paper_experiments as cac
+import scripts.run_fgda_experiments as cac
 
 
 def build_experiment(args):

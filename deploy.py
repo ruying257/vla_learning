@@ -1,4 +1,11 @@
-﻿import json
+﻿# 通用部署脚本
+#
+# 程序说明：
+# - 只负责加载 ACT checkpoint 并在 MuJoCo viewer 中执行策略。
+# - 默认值保持通用部署配置；论文实验或批量 sweep 应通过 runner 注入环境变量。
+# - metrics、TE none、强制开爪等能力保留为排查开关，不绑定具体实验。
+
+import json
 import os
 import traceback
 from datetime import datetime
@@ -19,15 +26,15 @@ from mujoco_env.y_env import SimpleEnv
 
 # 部署默认使用仓库内已有数据集和 checkpoint；需要切换时用环境变量覆盖。
 DATASET_ROOT = os.environ.get("ACT_DATASET_ROOT", "datasets/demo_v5_30demos_random")
-CKPT_DIR = os.environ.get("ACT_CKPT_DIR", "./ckpt/v5_finetune_new_data")
+CKPT_DIR = os.environ.get("ACT_CKPT_DIR", "./ckpt/v5")
 XML_PATH = os.environ.get("ACT_XML_PATH", "./mode/demo_scene.xml")
 OUTPUT_DIR = os.environ.get("ACT_VIDEO_DIR", "./videos")
 RECORD_VIDEO = os.environ.get("ACT_RECORD_VIDEO", "1") == "1"
 MAX_STEPS = int(os.environ.get("ACT_DEPLOY_MAX_STEPS", "500"))  # 最大部署步数 500
-DEPLOY_SEED = int(os.environ.get("ACT_DEPLOY_SEED", "6"))
+DEPLOY_SEED = int(os.environ.get("ACT_DEPLOY_SEED", "1"))
 CHUNK_SIZE = int(os.environ.get("ACT_CHUNK_SIZE", "50"))
 N_ACTION_STEPS = int(os.environ.get("ACT_N_ACTION_STEPS", "1"))
-METRICS_PATH = os.environ.get("ACT_DEPLOY_METRICS_PATH", "exp_log")
+METRICS_PATH = os.environ.get("ACT_DEPLOY_METRICS_PATH", "exp_log") 
 PLACEMENT_XY_THRESHOLD = float(os.environ.get("ACT_PLACEMENT_XY_THRESHOLD", "0.1"))
 PLACEMENT_Z_THRESHOLD = float(os.environ.get("ACT_PLACEMENT_Z_THRESHOLD", "0.08"))
 FORCE_RELEASE_ON_PLACEMENT = os.environ.get("ACT_FORCE_RELEASE_ON_PLACEMENT", "1") == "1"
@@ -43,7 +50,7 @@ def parse_temporal_ensemble_coeff(value):
     return float(value_text)
 
 
-TEMPORAL_ENSEMBLE_COEFF = parse_temporal_ensemble_coeff(os.environ.get("ACT_TEMPORAL_ENSEMBLE_COEFF", "0.9"))
+TEMPORAL_ENSEMBLE_COEFF = parse_temporal_ensemble_coeff(os.environ.get("ACT_TEMPORAL_ENSEMBLE_COEFF", "0.01"))
 
 
 def get_ckpt_name():

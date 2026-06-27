@@ -1,4 +1,9 @@
-﻿# 按指定 seed 补跑 CAC deploy 实验(跑None TE实验有问题，卡着不动)
+﻿# 运行不同 temporal ensemble 参数的 deploy sweep
+#
+# 程序说明：
+# - 只运行部署阶段，不执行训练。
+# - 使用同一个数据集和 checkpoint，对不同 temporal ensemble 系数做闭环部署对比。
+# - 每个 TE 配置拥有独立输出目录；seed_results.csv 只增量更新本次实际写出的 seed。
 
 import argparse
 import csv
@@ -12,66 +17,67 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXP_DIR = ROOT / "experiments" / "cac_act_paper"
-RESULTS_PATH = EXP_DIR / "results.csv"
-DEFAULT_FAILURE_GUIDED_DATASET = "failure_seed_data"
-DEFAULT_FGDA_CKPT = "./ckpt/v5_finetune_new_data"
+EXP_DIR = ROOT / "experiments" / "te_sweep_v5"
+RESULT_PATH = EXP_DIR / "result.csv"
+DEFAULT_DATASET_ROOT = "./datasets/demo_v5_30demos_random"
+DEFAULT_CKPT_DIR = "./ckpt/v5"
 DEFAULT_FORCE_RELEASE_STREAK = 3
-DEPLOY_SCRIPT = "4.deploy_test.py"
+DEPLOY_SCRIPT = "deploy.py"
 
 TE_SWEEP = [
-    ("FGDA_TE_none", "none", "FGDA 新 checkpoint，无 temporal ensemble 对照。"),
-    ("FGDA_TE_001", "0.01", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.01。"),
-    ("FGDA_TE_005", "0.05", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.05。"),
-    ("FGDA_TE_010", "0.10", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.10。"),
-    ("FGDA_TE_015", "0.15", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.15。"),
-    ("FGDA_TE_020", "0.20", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.20。"),
-    ("FGDA_TE_030", "0.30", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.30。"),
-    ("FGDA_TE_070", "0.70", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.70。"),
-    ("FGDA_TE_090", "0.90", "FGDA 新 checkpoint，固定 temporal ensemble 系数 0.90。"),
+    ("TE_none", "none", "无 temporal ensemble 对照。"),
+    ("TE_001", "0.01", "固定 temporal ensemble 系数 0.01。"),
+    ("TE_005", "0.05", "固定 temporal ensemble 系数 0.05。"),
+    ("TE_010", "0.10", "固定 temporal ensemble 系数 0.10。"),
+    ("TE_015", "0.15", "固定 temporal ensemble 系数 0.15。"),
+    ("TE_020", "0.20", "固定 temporal ensemble 系数 0.20。"),
+    ("TE_030", "0.30", "固定 temporal ensemble 系数 0.30。"),
+    ("TE_070", "0.70", "固定 temporal ensemble 系数 0.70。"),
+    ("TE_090", "0.90", "固定 temporal ensemble 系数 0.90。"),
 ]
 
-# 在这里修改默认补跑 seed；命令行 --deploy-seeds 会覆盖该默认值
-DEFAULT_DEPLOY_SEEDS = [1, 4, 7, 8, 11, 13, 15]
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run deploy sweep across temporal ensemble coefficients.")
+    parser.add_argument("--list", action="store_true", help="List TE deploy experiment matrix and exit.")
+    parser.add_argument("--exp", nargs="+", help="Specific experiment ids to run.")
+    parser.add_argument("--dataset-root", default=DEFAULT_DATASET_ROOT, help="Dataset root used for deploy.")
+    parser.add_argument("--ckpt-dir", default=DEFAULT_CKPT_DIR, help="Checkpoint directory used for deploy.")
+    parser.add_argument("--chunk-size", type=int, default=50)
+    parser.add_argument("--n-action-steps", type=int, default=None)
+    parser.add_argument("--deploy-trials", type=int, default=20)
+    parser.add_argument("--deploy-seed-start", type=int, default=1)
+    parser.add_argument("--deploy-max-steps", type=int, default=500)
+    parser.add_argument("--deploy-cooldown", type=float, default=2.0)
+    parser.add_argument("--continue-on-fail", action="store_true")
+    parser.add_argument("--summarize-only", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    return parser.parse_args()
+
 
 RESULT_FIELDS = [
-    "exp_id",
-    "suite",
-    "dataset",
-    "ckpt_dir",
-    "temporal_ensemble_coeff",
-    "adaptive_te",
-    "stage_resampling",
-    "steps",
-    "mean_action_error",
-    "final_loss",
-    "success_rate",
-    "placement_success_rate",
-    "release_success_rate",
-    "strict_success_rate",
-    "avg_steps",
-    "avg_release_steps",
-    "avg_success_steps",
-    "action_smoothness_mean",
-    "prediction_inconsistency_mean",
-    "final_mug_plate_xy_dist",
-    "min_mug_plate_xy_dist",
-    "failure_mode",
-    "video_path",
-    "notes",
+    "exp_id",                       # 实验唯一标识符
+    "dataset",                      # 数据集路径
+    "ckpt_dir",                     # 模型检查点目录
+    "temporal_ensemble_coeff",      # 时序集成系数 (TE)
+    "success_rate",                 # 成功率
+    "avg_steps",                    # 平均执行步数
+    "avg_success_steps",            # 成功完成的平均步数
+    "action_smoothness_mean",       # 动作平滑度均值
+    "prediction_inconsistency_mean",# 预测不一致性均值
+    "video_path",                   # 视频保存路径
+    "notes",                        # 实验备注说明
 ]
 
 SEED_RESULT_FIELDS = [
-    "seed",
-    "executed_steps",
-    "success",
-    "error",
-    "action_smoothness_mean",
-    "action_smoothness_max",
-    "prediction_inconsistency_mean",
-    "prediction_inconsistency_max",
+    "seed",                         # 部署种子
+    "executed_steps",               # 执行步数
+    "success",                      # 是否成功
+    "error",                        # 错误信息
+    "action_smoothness_mean",       # 动作平滑度均值
+    "action_smoothness_max",        # 动作平滑度最大值
+    "prediction_inconsistency_mean",# 预测不一致性均值
+    "prediction_inconsistency_max", # 预测不一致性最大值
 ]
-
 
 def experiment_output_dir(exp):
     """返回单个实验的独立输出目录。"""
@@ -114,20 +120,17 @@ def supports_deploy_no_ensemble():
 
 
 def experiment_matrix(args):
-    """返回 FGDA 新 checkpoint 在不同 TE 参数下的 deploy sweep。"""
+    """返回同一 checkpoint 在不同 TE 参数下的 deploy sweep。"""
     ckpt_dir = args.ckpt_dir
-    failure_dataset = args.failure_guided_dataset
+    dataset_root = args.dataset_root
     experiments = []
     for exp_id, te_coeff, notes in TE_SWEEP:
         experiments.append(
             {
                 "id": exp_id,
-                "suite": "fgda",
-                "dataset_root": failure_dataset,
+                "dataset_root": dataset_root,
                 "ckpt_dir": ckpt_dir,
                 "temporal_ensemble_coeff": te_coeff,
-                "adaptive_te": False,
-                "stage_resampling": False,
                 "requires_no_ensemble_support": te_coeff == "none",
                 "notes": notes,
             }
@@ -136,14 +139,14 @@ def experiment_matrix(args):
 
 
 def select_experiments(args):
-    """根据命令行参数选择 FGDA TE deploy 实验。"""
+    """根据命令行参数选择 TE deploy 实验。"""
     matrix = experiment_matrix(args)
     if args.exp:
         wanted = set(args.exp)
         selected = [exp for exp in matrix if exp["id"] in wanted]
         missing = wanted - {exp["id"] for exp in selected}
         if missing:
-            raise SystemExit(f"Unknown CAC experiment id: {', '.join(sorted(missing))}")
+            raise SystemExit(f"Unknown TE experiment id: {', '.join(sorted(missing))}")
     else:
         selected = matrix
     return selected
@@ -151,38 +154,50 @@ def select_experiments(args):
 
 def list_experiments(args):
     for exp in experiment_matrix(args):
-        print(f"{exp['id']} ({exp['suite']}): {exp['notes']}")
+        print(f"{exp['id']}: {exp['notes']}")
 
 
-def ensure_supported(exp, phases, dry_run):
-    """pending 能 dry-run 展示命令，但正式运行前必须确认底层脚本支持。"""
+def is_no_ensemble(exp):
+    """判断当前实验是否关闭 temporal ensemble。"""
+    return str(exp["temporal_ensemble_coeff"]).strip().lower() in {"none", "null"}
+
+
+def resolve_n_action_steps(exp, args):
+    """无 TE 默认执行完整 chunk；固定 TE 按 LeRobot 语义每步重预测。"""
+    if args.n_action_steps is not None:
+        return args.n_action_steps
+    if is_no_ensemble(exp):
+        return args.chunk_size
+    return 1
+
+
+def ensure_supported(exp, dry_run):
+    """正式运行前确认底层 deploy 脚本支持当前 TE 参数。"""
     if dry_run:
         return
-    if "deploy" in phases and exp.get("requires_no_ensemble_support") and not supports_deploy_no_ensemble():
+    if exp.get("requires_no_ensemble_support") and not supports_deploy_no_ensemble():
         raise SystemExit(
             f"{exp['id']} needs {DEPLOY_SCRIPT} to support ACT_TEMPORAL_ENSEMBLE_COEFF=none before formal deploy."
         )
 
 
-def ensure_dataset(exp, phases, dry_run):
+def ensure_dataset(exp, dry_run):
     if dry_run:
-        return
-    if "train" not in phases and "deploy" not in phases:
         return
     dataset_path = ROOT / exp["dataset_root"]
     if not dataset_path.exists():
         raise SystemExit(
             f"Dataset missing for {exp['id']}: {dataset_path}\n"
-            "Please collect/sync the dataset first, or pass --failure-guided-dataset."
+            "Please collect/sync the dataset first, or pass --dataset-root."
         )
 
 
-def ensure_checkpoint(exp, phases, dry_run):
-    if dry_run or "deploy" not in phases or "train" in phases:
+def ensure_checkpoint(exp, dry_run):
+    if dry_run:
         return
     ckpt_path = ROOT / exp["ckpt_dir"]
     if not ckpt_path.exists():
-        raise SystemExit(f"Checkpoint missing for deploy-only {exp['id']}: {ckpt_path}")
+        raise SystemExit(f"Checkpoint missing for deploy {exp['id']}: {ckpt_path}")
 
 
 def deploy_env(base_env, exp, args, seed):
@@ -195,8 +210,9 @@ def deploy_env(base_env, exp, args, seed):
             "ACT_DATASET_ROOT": exp["dataset_root"],
             "ACT_CKPT_DIR": exp["ckpt_dir"],
             "ACT_CHUNK_SIZE": str(args.chunk_size),
-            "ACT_N_ACTION_STEPS": str(args.n_action_steps),
+            "ACT_N_ACTION_STEPS": str(resolve_n_action_steps(exp, args)),
             "ACT_TEMPORAL_ENSEMBLE_COEFF": str(exp["temporal_ensemble_coeff"]),
+            "ACT_ADAPTIVE_TE": "0",
             "ACT_DEPLOY_MAX_STEPS": str(args.deploy_max_steps),
             "ACT_DEPLOY_SEED": str(seed),
             "ACT_VIDEO_DIR": str(exp_dir / "videos"),
@@ -216,6 +232,7 @@ def print_env_delta(env):
         "ACT_CHUNK_SIZE",
         "ACT_N_ACTION_STEPS",
         "ACT_TEMPORAL_ENSEMBLE_COEFF",
+        "ACT_ADAPTIVE_TE",
         "ACT_DEPLOY_SEED",
         "ACT_VIDEO_DIR",
         "ACT_DEPLOY_METRICS_PATH",
@@ -279,39 +296,24 @@ def mean_metric(payloads, key, digits=4):
     return f"{sum(values) / len(values):.{digits}f}"
 
 
-def is_release_success(payload):
-    return bool(payload.get("placement_success", False)) and payload.get("final_gripper_qpos") is not None and payload.get("final_gripper_qpos", 1.0) < 0.1
-
-
 def default_args_for_order():
     class Defaults:
-        ckpt_dir = DEFAULT_FGDA_CKPT
-        failure_guided_dataset = DEFAULT_FAILURE_GUIDED_DATASET
+        ckpt_dir = DEFAULT_CKPT_DIR
+        dataset_root = DEFAULT_DATASET_ROOT
 
     return Defaults()
 
 
 def summarize_experiment(exp, args):
-    exp_dir = experiment_output_dir(exp)
-    train_metrics = read_json(exp_dir / "metrics" / "train.json")
-    if train_metrics is None:
-        train_metrics = read_json(EXP_DIR / "metrics" / f"{exp['id']}_train.json")
-
     deploy_paths = deploy_metric_paths(exp)
     deploy_payloads = [read_json(path) for path in deploy_paths]
     deploy_payloads = [payload for payload in deploy_payloads if payload]
 
-    release_success_payloads = [
-        payload
-        for payload in deploy_payloads
-        if is_release_success(payload)
-    ]
     strict_success_payloads = [
         payload
         for payload in deploy_payloads
         if payload.get("strict_success", payload.get("success", False))
     ]
-    failure_modes = sorted({payload.get("failure_mode", "") for payload in deploy_payloads if payload.get("failure_mode")})
     video_path = ""
     for payload in deploy_payloads:
         if payload.get("video_path"):
@@ -320,27 +322,14 @@ def summarize_experiment(exp, args):
 
     return {
         "exp_id": exp["id"],
-        "suite": exp["suite"],
         "dataset": exp["dataset_root"],
         "ckpt_dir": exp["ckpt_dir"],
         "temporal_ensemble_coeff": exp["temporal_ensemble_coeff"],
-        "adaptive_te": int(bool(exp.get("adaptive_te"))),
-        "stage_resampling": int(bool(exp.get("stage_resampling"))),
-        "steps": train_metrics.get("training_steps", "") if train_metrics else "",
-        "mean_action_error": "" if not train_metrics else f"{train_metrics['mean_action_error']:.4f}",
-        "final_loss": "" if not train_metrics else f"{train_metrics['final_loss']:.4f}",
         "success_rate": rate(deploy_payloads, "success"),
-        "placement_success_rate": rate(deploy_payloads, "placement_success"),
-        "release_success_rate": "" if not deploy_payloads else f"{sum(is_release_success(payload) for payload in deploy_payloads) / len(deploy_payloads):.2f}",
-        "strict_success_rate": rate(deploy_payloads, "strict_success"),
         "avg_steps": mean_metric(deploy_payloads, "executed_steps", digits=1),
-        "avg_release_steps": mean_metric(release_success_payloads, "executed_steps", digits=1),
         "avg_success_steps": mean_metric(strict_success_payloads, "executed_steps", digits=1),
         "action_smoothness_mean": mean_metric(deploy_payloads, "action_smoothness_mean"),
         "prediction_inconsistency_mean": mean_metric(deploy_payloads, "prediction_inconsistency_mean"),
-        "final_mug_plate_xy_dist": mean_metric(deploy_payloads, "final_mug_plate_xy_dist"),
-        "min_mug_plate_xy_dist": mean_metric(deploy_payloads, "min_mug_plate_xy_dist"),
-        "failure_mode": "+".join(failure_modes),
         "video_path": video_path,
         "notes": exp["notes"],
     }
@@ -419,22 +408,41 @@ def upsert_seed_results(exp, metric_paths):
     return output_path
 
 
-def upsert_result(row):
-    rows = []
-    if RESULTS_PATH.exists():
-        with open(RESULTS_PATH, "r", encoding="utf-8", newline="") as f:
-            rows = list(csv.DictReader(f))
-
-    rows = [old for old in rows if old.get("exp_id") != row["exp_id"]]
-    rows.append(row)
-    order = {exp["id"]: idx for idx, exp in enumerate(experiment_matrix(default_args_for_order()))}
-    rows.sort(key=lambda item: order.get(item.get("exp_id"), 999))
-
-    RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(RESULTS_PATH, "w", encoding="utf-8", newline="") as f:
+def write_result_csv(path, rows):
+    """统一写结果 CSV，并按当前字段定义迁移历史结果。"""
+    # 结果字段可能随实验需求精简；回写旧 CSV 时主动丢弃已经移除的历史列。
+    normalized_rows = [
+        {field: row.get(field, "") for field in RESULT_FIELDS}
+        for row in rows
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=RESULT_FIELDS)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(normalized_rows)
+
+
+def write_experiment_result(exp, row):
+    """写入单个实验目录下的一行汇总 result.csv。"""
+    output_path = experiment_output_dir(exp) / "result.csv"
+    write_result_csv(output_path, [row])
+    return output_path
+
+
+def upsert_global_result(row):
+    current_order = {exp["id"]: idx for idx, exp in enumerate(experiment_matrix(default_args_for_order()))}
+    rows = []
+    if RESULT_PATH.exists():
+        with open(RESULT_PATH, "r", encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    # 汇总表只保留当前 TE sweep 矩阵，旧实验行不再作为活跃结果保留。
+    rows = [old for old in rows if old.get("exp_id") in current_order and old.get("exp_id") != row["exp_id"]]
+    rows.append(row)
+    rows.sort(key=lambda item: current_order.get(item.get("exp_id"), 999))
+
+    write_result_csv(RESULT_PATH, rows)
+    return RESULT_PATH
 
 
 def update_run_outputs(exp, args, updated_metric_paths):
@@ -442,22 +450,25 @@ def update_run_outputs(exp, args, updated_metric_paths):
     if args.dry_run:
         return
     seed_results_path = upsert_seed_results(exp, updated_metric_paths)
-    upsert_result(summarize_experiment(exp, args))
+    row = summarize_experiment(exp, args)
+    experiment_result_path = write_experiment_result(exp, row)
+    global_result_path = upsert_global_result(row)
     if seed_results_path:
         print(f"updated: {seed_results_path}")
+    print(f"updated: {experiment_result_path}")
+    print(f"updated: {global_result_path}")
 
 
 def run_one(exp, args):
-    phases = ["deploy"]
-    ensure_supported(exp, phases, args.dry_run)
-    ensure_dataset(exp, phases, args.dry_run)
-    ensure_checkpoint(exp, phases, args.dry_run)
+    ensure_supported(exp, args.dry_run)
+    ensure_dataset(exp, args.dry_run)
+    ensure_checkpoint(exp, args.dry_run)
 
     base_env = os.environ.copy()
     python_cmd = [sys.executable]
     updated_metric_paths = []
 
-    for seed_index, seed in enumerate(args.deploy_seeds):
+    for seed in range(args.deploy_seed_start, args.deploy_seed_start + args.deploy_trials):
         env = deploy_env(base_env, exp, args, seed)
         metrics_path = Path(env["ACT_DEPLOY_METRICS_PATH"])
         before_signature = file_signature(metrics_path)
@@ -475,7 +486,7 @@ def run_one(exp, args):
             if not args.continue_on_fail:
                 update_run_outputs(exp, args, updated_metric_paths)
                 raise SystemExit(code)
-        if seed_index + 1 < len(args.deploy_seeds) and args.deploy_cooldown > 0:
+        if seed + 1 < args.deploy_seed_start + args.deploy_trials and args.deploy_cooldown > 0:
             time.sleep(args.deploy_cooldown)
 
     update_run_outputs(exp, args, updated_metric_paths)
@@ -483,44 +494,13 @@ def run_one(exp, args):
 
 def summarize_only(exps, args):
     for exp in exps:
-        upsert_result(summarize_experiment(exp, args))
-    print(f"updated: {RESULTS_PATH}")
+        row = summarize_experiment(exp, args)
+        write_experiment_result(exp, row)
+        upsert_global_result(row)
+    print(f"updated: {RESULT_PATH}")
     print("seed_results.csv is only incrementally updated after deploy writes metrics.")
 
 
-def parse_seed_list(seed_text):
-    """解析逗号分隔的 deploy seed 列表，例如 3 或 3,7,11。"""
-    try:
-        seeds = [int(seed.strip()) for seed in seed_text.split(",") if seed.strip()]
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("--deploy-seeds 只支持整数或逗号分隔的整数列表") from exc
-    if not seeds:
-        raise argparse.ArgumentTypeError("--deploy-seeds 至少需要指定一个整数 seed")
-    return seeds
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Rerun CAC deploy for explicit experiment ids and seed list.")
-    parser.add_argument("--list", action="store_true", help="List CAC paper experiment matrix and exit.")
-    parser.add_argument("--exp", nargs="+", help="Required experiment ids to rerun, for example FGDA_TE_090.")
-    parser.add_argument("--failure-guided-dataset", default=DEFAULT_FAILURE_GUIDED_DATASET)
-    parser.add_argument("--ckpt-dir", default=DEFAULT_FGDA_CKPT, help="Finetuned FGDA checkpoint used for deploy.")
-    parser.add_argument("--chunk-size", type=int, default=50)
-    parser.add_argument("--n-action-steps", type=int, default=1)
-    parser.add_argument(
-        "--deploy-seeds",
-        type=parse_seed_list,
-        default=DEFAULT_DEPLOY_SEEDS,
-        help="Seed list to rerun, for example 3 or 3,7,11.",
-    )
-    parser.add_argument("--deploy-max-steps", type=int, default=500)
-    parser.add_argument("--deploy-cooldown", type=float, default=2.0)
-    parser.add_argument("--continue-on-fail", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
-    if not args.list and not args.exp:
-        parser.error("--exp is required when rerunning deploy seeds")
-    return args
 
 
 def main():
@@ -531,16 +511,18 @@ def main():
 
     selected = select_experiments(args)
     if not selected:
-        print("No CAC experiments selected.")
+        print("No TE experiments selected.")
+        return
+    if args.summarize_only:
+        summarize_only(selected, args)
         return
 
     for exp in selected:
-        print(f"===== {exp['id']} ({exp['suite']}) =====")
-        print(f"rerun deploy seeds: {args.deploy_seeds}")
+        print(f"===== {exp['id']} =====")
         run_one(exp, args)
 
     if not args.dry_run:
-        print(f"results: {RESULTS_PATH}")
+        print(f"results: {RESULT_PATH}")
 
 
 if __name__ == "__main__":
