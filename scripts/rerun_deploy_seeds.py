@@ -12,12 +12,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXP_DIR = ROOT / "experiments" / "te_sweep"
+EXP_DIR = ROOT / "experiments" / "te_sweep_v5_finetune"
 RESULT_PATH = EXP_DIR / "result.csv"
 DEFAULT_DATASET_ROOT = "./datasets/demo_v5_30demos_random"
 DEFAULT_CKPT_DIR = "./ckpt/v5_finetune_new_data"
 DEFAULT_FORCE_RELEASE_STREAK = 3
-DEPLOY_SCRIPT = "4.deploy_cate_adaptive.py"
+DEPLOY_SCRIPT = "deploy.py"
 
 TE_SWEEP = [
     ("TE_none", "none", "无 temporal ensemble 对照。"),
@@ -32,7 +32,30 @@ TE_SWEEP = [
 ]
 
 # 在这里修改默认补跑 seed；命令行 --deploy-seeds 会覆盖该默认值
-DEFAULT_DEPLOY_SEEDS = [1, 4, 7, 8, 11, 13, 15]
+DEFAULT_DEPLOY_SEEDS = [20]
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Rerun TE deploy for explicit experiment ids and seed list.")
+    parser.add_argument("--list", action="store_true", help="List TE deploy experiment matrix and exit.")
+    parser.add_argument("--exp", nargs="+", help="Required experiment ids to rerun, for example TE_090.")
+    parser.add_argument("--dataset-root", default=DEFAULT_DATASET_ROOT, help="Dataset root used for deploy.")
+    parser.add_argument("--ckpt-dir", default=DEFAULT_CKPT_DIR, help="Checkpoint directory used for deploy.")
+    parser.add_argument("--chunk-size", type=int, default=50)
+    parser.add_argument("--n-action-steps", type=int, default=None)
+    parser.add_argument(
+        "--deploy-seeds",
+        type=parse_seed_list,
+        default=DEFAULT_DEPLOY_SEEDS,
+        help="Seed list to rerun, for example 3 or 3,7,11.",
+    )
+    parser.add_argument("--deploy-max-steps", type=int, default=500)
+    parser.add_argument("--deploy-cooldown", type=float, default=2.0)
+    parser.add_argument("--continue-on-fail", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    if not args.list and not args.exp:
+        parser.error("--exp is required when rerunning deploy seeds")
+    return args
 
 RESULT_FIELDS = [
     "exp_id",
@@ -524,30 +547,6 @@ def parse_seed_list(seed_text):
     if not seeds:
         raise argparse.ArgumentTypeError("--deploy-seeds 至少需要指定一个整数 seed")
     return seeds
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Rerun TE deploy for explicit experiment ids and seed list.")
-    parser.add_argument("--list", action="store_true", help="List TE deploy experiment matrix and exit.")
-    parser.add_argument("--exp", nargs="+", help="Required experiment ids to rerun, for example TE_090.")
-    parser.add_argument("--dataset-root", default=DEFAULT_DATASET_ROOT, help="Dataset root used for deploy.")
-    parser.add_argument("--ckpt-dir", default=DEFAULT_CKPT_DIR, help="Checkpoint directory used for deploy.")
-    parser.add_argument("--chunk-size", type=int, default=50)
-    parser.add_argument("--n-action-steps", type=int, default=None)
-    parser.add_argument(
-        "--deploy-seeds",
-        type=parse_seed_list,
-        default=DEFAULT_DEPLOY_SEEDS,
-        help="Seed list to rerun, for example 3 or 3,7,11.",
-    )
-    parser.add_argument("--deploy-max-steps", type=int, default=500)
-    parser.add_argument("--deploy-cooldown", type=float, default=2.0)
-    parser.add_argument("--continue-on-fail", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
-    if not args.list and not args.exp:
-        parser.error("--exp is required when rerunning deploy seeds")
-    return args
 
 
 def main():

@@ -32,6 +32,7 @@ vla/
 ├── 2.visualize_data.py        # 数据可视化脚本
 ├── 3.train.py                 # 模型训练脚本
 ├── 3.train_finetune.py        # 基于已有 checkpoint 续训脚本
+├── 3.train_finetune_replay.py # 带旧数据回放的 checkpoint 微调脚本
 ├── deploy.py                  # 策略部署脚本
 ├── KeyControl.py              # 键盘控制模块
 ├── LoadMode.py                # 模型加载模块
@@ -150,6 +151,24 @@ python 3.train_finetune.py
 
 续训脚本默认开启 WandB 记录；如需离线跑通，可设置 `ACT_USE_WANDB=0`。续训输出目录必须和输入 checkpoint 目录不同，避免覆盖已训练好的模型。
 
+如果补充数据规模较小，并且需要降低模型遗忘旧任务分布的风险，可使用带旧数据回放的微调脚本：
+
+```bash
+ACT_RESUME_CKPT_DIR=ckpt/v5 \
+ACT_DATASET_ROOT=datasets/failure_seed_data \
+ACT_REPLAY_DATASET_ROOT=datasets/demo_v5_30demos_random \
+ACT_REPLAY_RATIO=0.8 \
+ACT_CKPT_DIR=ckpt/v5_finetune_replay \
+ACT_TRAINING_STEPS=1000 \
+ACT_SAVE_STEPS=250,500,750,1000 \
+ACT_LR=1e-5 \
+python 3.train_finetune_replay.py
+```
+
+`ACT_REPLAY_RATIO=0.8` 表示每个 batch 中旧数据的目标占比为 80%，其余 20% 来自补充数据。默认 batch size 为 64，因此实际每批采样 51 条旧数据和 13 条补充数据。两个数据源均采用有放回采样，避免较小的补充数据集很快耗尽。
+
+训练完成后，阶段模型分别保存到 `ckpt/v5_finetune_replay/step_0250`、`step_0500`、`step_0750` 和 `step_1000`。最终模型还会保存到 `ckpt/v5_finetune_replay` 根目录，训练配置、实际采样比例及两套数据的离线动作误差记录在 `training_metrics.json` 中。离线动作误差只用于观察拟合和遗忘趋势，最终效果仍需通过闭环部署验证。
+
 ### 4. 部署策略
 
 ```bash
@@ -157,6 +176,64 @@ python deploy.py
 ```
 
 加载训练好的模型，在仿真环境中自主运行。
+
+如需批量比较 `ckpt/v5_finetune_replay` 中的四个微调阶段，使用专用评估脚本：
+
+```bash
+python scripts/run_finetune_replay_eval.py
+```
+
+该脚本默认使用 `TE=0.30`，按顺序运行 `step_0250`、`step_0500`、`step_0750` 和 `step_1000`。部署 seed 默认为 `1..20` 但排除 seed 17，共 19 个。批量评估默认使用 EGL 离屏渲染，不打开 MuJoCo 窗口；策略所需的相机图像仍会正常生成。
+
+```bash
+# 查看可选的微调阶段
+python scripts/run_finetune_replay_eval.py --list
+
+# 只评估指定阶段，并覆盖 TE 和 seed
+python scripts/run_finetune_replay_eval.py \
+  --exp step_0250 step_0500 \
+  --te none \
+  --deploy-seeds 1,5,18
+
+# 显式打开 MuJoCo 窗口
+python scripts/run_finetune_replay_eval.py --exp step_0250 --viewer
+
+# 关闭视频以减少编码开销，并在 shell 后台运行
+nohup python scripts/run_finetune_replay_eval.py --no-record-video \
+  > finetune_replay_eval.log 2>&1 &
+```
+
+输出会按 TE 和微调阶段分开保存，例如 `experiments/finetune_replay_eval/TE_030/step_0250/`。每个阶段包含 `logs/`、`metrics/`、`videos/`、`seed_results.csv` 和 `result.csv`；当前 TE 目录下的 `result.csv` 汇总四个阶段。完整参数说明和更多示例也写在脚本文件开头。
+
+如果某些 seed 因 MuJoCo 初始化异常需要补跑，使用专用脚本 `scripts/rerun_finetune_replay_seeds.py`。先在脚本顶部分别填写四个 step 需要补跑的 seed：
+
+```python
+RERUN_SEEDS_BY_EXP = {
+    "step_0250": [1, 6],
+    "step_0500": [],
+    "step_0750": [2, 12],
+    "step_1000": [8],
+}
+```
+
+空列表表示跳过该 step。配置完成后可一次检查或执行所有补跑任务：
+
+```bash
+# 查看当前补跑配置
+python scripts/rerun_finetune_replay_seeds.py --list
+
+# 只打印将执行的命令和输出路径
+python scripts/rerun_finetune_replay_seeds.py --dry-run
+
+# EGL headless 模式补跑全部非空配置
+python scripts/rerun_finetune_replay_seeds.py
+
+# 只处理指定 step，并关闭视频
+python scripts/rerun_finetune_replay_seeds.py \
+  --exp step_0250 step_0750 --no-record-video
+```
+
+补跑会覆盖相同 step/seed 的 log 和 metrics，并只在 `seed_results.csv` 中更新本次实际产生新 metrics 的 seed，其他 seed 不变。默认单个任务失败不会阻断后续补跑；如需遇错即停，添加 `--stop-on-fail`。
 
 ## 仿真环境配置
 
@@ -178,8 +255,13 @@ python deploy.py
 
 - X 轴范围：[0.24, 0.4]
 - Y 轴范围：[-0.4, 0.2]
-- Z 轴高度：0.83（固定）
+- Z 轴高度：0.81m（固定）
 - 物体间最小距离：0.15m
+
+`reset(seed=...)` 会先清空上一次 MuJoCo 仿真的速度、控制量和接触状态，
+因此同一 seed 会使用相同的杯盘采样坐标，并从相同动力学状态开始稳定。
+当前 0.15m 约束是物体中心距离，不是网格边界距离；为保持历史 seed 的坐标映射，
+本修正不会重采样已经发生网格接触的 seed。
 
 ## 任务成功条件
 

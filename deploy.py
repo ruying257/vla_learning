@@ -1,7 +1,8 @@
 ﻿# 通用部署脚本
 #
 # 程序说明：
-# - 只负责加载 ACT checkpoint 并在 MuJoCo viewer 中执行策略。
+# - 只负责加载 ACT checkpoint 并在 MuJoCo 中执行策略。
+# - ACT_USE_VIEWER=0 时不创建窗口，但仍会离屏渲染策略所需的相机图像。
 # - 默认值保持通用部署配置；论文实验或批量 sweep 应通过 runner 注入环境变量。
 # - metrics、TE none、强制开爪等能力保留为排查开关，不绑定具体实验。
 
@@ -26,12 +27,13 @@ from mujoco_env.y_env import SimpleEnv
 
 # 部署默认使用仓库内已有数据集和 checkpoint；需要切换时用环境变量覆盖。
 DATASET_ROOT = os.environ.get("ACT_DATASET_ROOT", "datasets/demo_v5_30demos_random")
-CKPT_DIR = os.environ.get("ACT_CKPT_DIR", "./ckpt/v5")
+CKPT_DIR = os.environ.get("ACT_CKPT_DIR", "./ckpt/v5_finetune_new_data")
 XML_PATH = os.environ.get("ACT_XML_PATH", "./mode/demo_scene.xml")
 OUTPUT_DIR = os.environ.get("ACT_VIDEO_DIR", "./videos")
 RECORD_VIDEO = os.environ.get("ACT_RECORD_VIDEO", "1") == "1"
+USE_VIEWER = os.environ.get("ACT_USE_VIEWER", "1") == "1"
 MAX_STEPS = int(os.environ.get("ACT_DEPLOY_MAX_STEPS", "500"))  # 最大部署步数 500
-DEPLOY_SEED = int(os.environ.get("ACT_DEPLOY_SEED", "1"))
+DEPLOY_SEED = int(os.environ.get("ACT_DEPLOY_SEED", "17"))
 CHUNK_SIZE = int(os.environ.get("ACT_CHUNK_SIZE", "50"))
 N_ACTION_STEPS = int(os.environ.get("ACT_N_ACTION_STEPS", "1"))
 METRICS_PATH = os.environ.get("ACT_DEPLOY_METRICS_PATH", "exp_log") 
@@ -212,6 +214,8 @@ def write_deploy_metrics(metrics_path, video_path, step, success, failure_mode, 
         "xml_path": XML_PATH,
         "video_path": video_path if RECORD_VIDEO else "",
         "record_video": RECORD_VIDEO,
+        "use_viewer": USE_VIEWER,
+        "mujoco_gl": os.environ.get("MUJOCO_GL", ""),
         "deploy_seed": DEPLOY_SEED,
         "max_steps": MAX_STEPS,
         "executed_steps": step,
@@ -249,6 +253,7 @@ def main():
     print(f"dataset_root: {DATASET_ROOT}")
     print(f"ckpt_dir: {CKPT_DIR}")
     print(f"temporal_ensemble_coeff: {TEMPORAL_ENSEMBLE_COEFF}")
+    print(f"use_viewer: {USE_VIEWER}")
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -275,12 +280,13 @@ def main():
 
     try:
         policy = build_policy()
-        env = SimpleEnv(XML_PATH, action_type="joint_angle")
+        env = SimpleEnv(XML_PATH, action_type="joint_angle", use_viewer=USE_VIEWER)
         env.reset(seed=DEPLOY_SEED)
         initial_task_metrics = env.get_task_metrics(PLACEMENT_XY_THRESHOLD, PLACEMENT_Z_THRESHOLD)
         img_transform = torchvision.transforms.ToTensor()
 
-        while env.env.is_viewer_alive():
+        # Headless 模式没有 viewer，由成功条件或 MAX_STEPS 结束主循环。
+        while not USE_VIEWER or env.env.is_viewer_alive():
             env.step_env()
             if not env.env.loop_every(HZ=20):
                 continue
@@ -301,6 +307,7 @@ def main():
 
             state = env.get_ee_pose()
             image, wrist_image = env.grab_image()
+            video_frame = image
 
             image = img_transform(Image.fromarray(image).resize((256, 256)))
             wrist_image = img_transform(Image.fromarray(wrist_image).resize((256, 256)))
@@ -332,13 +339,12 @@ def main():
             env.render()
 
             if RECORD_VIDEO:
-                frame, _ = env.grab_image()
                 if video_writer is None:
-                    height, width = frame.shape[:2]
+                    height, width = video_frame.shape[:2]
                     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                     video_writer = cv2.VideoWriter(video_path, fourcc, 20.0, (width, height))
                 # OpenCV 使用 BGR，需要从 MuJoCo 的 RGB 帧转换。
-                video_writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                video_writer.write(cv2.cvtColor(video_frame, cv2.COLOR_RGB2BGR))
 
             step += 1
             if MAX_STEPS and step >= MAX_STEPS:

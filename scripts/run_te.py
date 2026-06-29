@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXP_DIR = ROOT / "experiments" / "te_sweep_v5"
+EXP_DIR = ROOT / "experiments" / "te_sweep_v5_20seeds"
 RESULT_PATH = EXP_DIR / "result.csv"
 DEFAULT_DATASET_ROOT = "./datasets/demo_v5_30demos_random"
 DEFAULT_CKPT_DIR = "./ckpt/v5"
@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument("--ckpt-dir", default=DEFAULT_CKPT_DIR, help="Checkpoint directory used for deploy.")
     parser.add_argument("--chunk-size", type=int, default=50)
     parser.add_argument("--n-action-steps", type=int, default=None)
-    parser.add_argument("--deploy-trials", type=int, default=20)
+    parser.add_argument("--deploy-trials", type=int, default=41)
     parser.add_argument("--deploy-seed-start", type=int, default=1)
     parser.add_argument("--deploy-max-steps", type=int, default=500)
     parser.add_argument("--deploy-cooldown", type=float, default=2.0)
