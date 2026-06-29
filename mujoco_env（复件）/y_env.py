@@ -63,6 +63,8 @@ class SimpleEnv:
         重置环境
         将机器人移动到初始位置，根据种子设置物体位置
         '''
+        # 先清空上一次仿真残留的速度、控制量和接触状态，保证相同 seed 可复现。
+        self.env.reset(step=False)
         if seed is not None:
             np.random.seed(seed=seed) 
         q_init = np.deg2rad([0,0,0,0,0,0])

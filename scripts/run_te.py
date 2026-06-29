@@ -4,6 +4,12 @@
 # - 只运行部署阶段，不执行训练。
 # - 使用同一个数据集和 checkpoint，对不同 temporal ensemble 系数做闭环部署对比。
 # - 每个 TE 配置拥有独立输出目录；seed_results.csv 只增量更新本次实际写出的 seed。
+# - 默认使用 EGL headless 模式，不打开 MuJoCo 窗口；加 --viewer 可显示实时窗口。
+#
+# 运行示例：
+#   python scripts/run_te.py                  # 默认 headless 运行全部 TE 实验
+#   python scripts/run_te.py --headless       # 显式指定 headless
+#   python scripts/run_te.py --exp TE_030 --viewer  # 打开窗口运行指定实验
 
 import argparse
 import csv
@@ -17,7 +23,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXP_DIR = ROOT / "experiments" / "te_sweep_v5_20seeds"
+EXP_DIR = ROOT / "experiments" / "te_030_v5_50seeds"
 RESULT_PATH = EXP_DIR / "result.csv"
 DEFAULT_DATASET_ROOT = "./datasets/demo_v5_30demos_random"
 DEFAULT_CKPT_DIR = "./ckpt/v5"
@@ -44,10 +50,24 @@ def parse_args():
     parser.add_argument("--ckpt-dir", default=DEFAULT_CKPT_DIR, help="Checkpoint directory used for deploy.")
     parser.add_argument("--chunk-size", type=int, default=50)
     parser.add_argument("--n-action-steps", type=int, default=None)
-    parser.add_argument("--deploy-trials", type=int, default=41)
-    parser.add_argument("--deploy-seed-start", type=int, default=1)
+    parser.add_argument("--deploy-trials", type=int, default=100)
+    parser.add_argument("--deploy-seed-start", type=int, default=100)
     parser.add_argument("--deploy-max-steps", type=int, default=500)
-    parser.add_argument("--deploy-cooldown", type=float, default=2.0)
+    parser.add_argument("--deploy-cooldown", type=float, default=1.0)
+    display_group = parser.add_mutually_exclusive_group()
+    display_group.add_argument(
+        "--headless",
+        dest="headless",
+        action="store_true",
+        help="Run with EGL offscreen rendering; this is the default.",
+    )
+    display_group.add_argument(
+        "--viewer",
+        dest="headless",
+        action="store_false",
+        help="Open the MuJoCo realtime viewer.",
+    )
+    parser.set_defaults(headless=True)
     parser.add_argument("--continue-on-fail", action="store_true")
     parser.add_argument("--summarize-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -220,8 +240,15 @@ def deploy_env(base_env, exp, args, seed):
             "ACT_DEPLOY_METRICS_PATH": str(exp_dir / "metrics" / f"deploy_seed{seed}.json"),
             "ACT_FORCE_RELEASE_ON_PLACEMENT": "1",
             "ACT_FORCE_RELEASE_STREAK": str(DEFAULT_FORCE_RELEASE_STREAK),
+            "ACT_USE_VIEWER": "0" if args.headless else "1",
         }
     )
+    if args.headless:
+        # Headless 部署使用 EGL 离屏渲染，不依赖 X11 窗口。
+        env["MUJOCO_GL"] = "egl"
+    else:
+        # 窗口模式使用 GLFW，避免继承外部 EGL 设置。
+        env.pop("MUJOCO_GL", None)
     return env
 
 
@@ -238,6 +265,8 @@ def print_env_delta(env):
         "ACT_DEPLOY_METRICS_PATH",
         "ACT_FORCE_RELEASE_ON_PLACEMENT",
         "ACT_FORCE_RELEASE_STREAK",
+        "ACT_USE_VIEWER",
+        "MUJOCO_GL",
     ]
     for key in keys:
         if key in env:

@@ -15,6 +15,13 @@ import copy
 import glfw
 
 class SimpleEnv:
+    MAX_INITIALIZATION_ATTEMPTS = 100
+    INITIALIZATION_SETTLE_STEPS = 100
+    MUG_XY_BOUNDS = ((0.20, 0.44), (-0.44, 0.24))
+    PLATE_XY_BOUNDS = ((0.20, 0.44), (-0.44, 0.24))
+    MUG_Z_BOUNDS = (0.80, 0.95)
+    PLATE_Z_BOUNDS = (0.78, 0.85)
+
     def __init__(self,
                  xml_path,
                  action_type='eef_pose',
@@ -58,44 +65,118 @@ class SimpleEnv:
             use_rgb_overlay = False,
             loc_rgb_overlay = 'top right',
         )
+
+    def _has_mug_plate_contact(self):
+        """检查杯子和盘子的碰撞网格是否存在直接接触。"""
+        model = self.env.model
+        data = self.env.data
+        mug_root_id = model.body('body_obj_mug_5').id
+        plate_root_id = model.body('body_obj_plate_11').id
+        target_roots = {mug_root_id, plate_root_id}
+
+        for contact_idx in range(data.ncon):
+            contact = data.contact[contact_idx]
+            body1_id = model.geom_bodyid[contact.geom1]
+            body2_id = model.geom_bodyid[contact.geom2]
+            contact_roots = {
+                int(model.body_rootid[body1_id]),
+                int(model.body_rootid[body2_id]),
+            }
+            if contact_roots == target_roots:
+                return True
+        return False
+
+    @staticmethod
+    def _is_in_bounds(position, xy_bounds, z_bounds):
+        """检查物体稳定后是否仍位于任务工作区。"""
+        return (
+            xy_bounds[0][0] <= position[0] <= xy_bounds[0][1]
+            and xy_bounds[1][0] <= position[1] <= xy_bounds[1][1]
+            and z_bounds[0] <= position[2] <= z_bounds[1]
+        )
+
+    def _settled_scene_error(self):
+        """返回稳定后场景的拒绝原因，空字符串表示场景合法。"""
+        p_mug, p_plate = self.get_obj_pose()
+        if not np.isfinite(np.concatenate([p_mug, p_plate])).all():
+            return 'non_finite_position'
+        if self._has_mug_plate_contact():
+            return 'mug_plate_contact_after_settle'
+        if not self._is_in_bounds(p_mug, self.MUG_XY_BOUNDS, self.MUG_Z_BOUNDS):
+            return 'mug_out_of_bounds'
+        if not self._is_in_bounds(p_plate, self.PLATE_XY_BOUNDS, self.PLATE_Z_BOUNDS):
+            return 'plate_out_of_bounds'
+        return ''
+
     def reset(self, seed=None):
         '''
         重置环境
         将机器人移动到初始位置，根据种子设置物体位置
         '''
-        # 先清空上一次仿真残留的速度、控制量和接触状态，保证相同 seed 可复现。
-        self.env.reset(step=False)
         if seed is not None:
-            np.random.seed(seed=seed) 
-        q_init = np.deg2rad([0,0,0,0,0,0])
-        # 机械臂初始位置
-        q_zero = np.deg2rad([0, -90, 90, -90, -90, 90])
-        self.env.forward(q=q_zero,joint_names=self.joint_names,increase_tick=False)
+            np.random.seed(seed=seed)
 
-        # 设置物体位置
+        q_zero = np.deg2rad([0, -90, 90, -90, -90, 90])
         obj_names = self.env.get_body_names(prefix='body_obj_')
         n_obj = len(obj_names)
-        obj_xyzs = sample_xyzs(
-            n_obj,
-            x_range   = [+0.24,+0.4],
-            y_range   = [-0.4,+0.2],
-            z_range   = [0.81,0.81],
-            min_dist  = 0.15,
-            xy_margin = 0.0
-        )
-        for obj_idx in range(n_obj):
-            self.env.set_p_base_body(body_name=obj_names[obj_idx],p=obj_xyzs[obj_idx,:])
-            self.env.set_R_base_body(body_name=obj_names[obj_idx],R=np.eye(3,3))
-        self.env.forward(increase_tick=False)
+        self.last_reset_attempts = 0
+        self.last_reset_rejections = {}
 
-        # 设置机器人初始位姿
-        self.last_q = copy.deepcopy(q_zero)
-        self.q = np.concatenate([q_zero, np.array([0.0]*1)])
-        self.p0, self.R0 = self.env.get_pR_body(body_name='wrist_3_link')
-        mug_init_pose, plate_init_pose = self.get_obj_pose()
-        self.obj_init_pose = np.concatenate([mug_init_pose, plate_init_pose],dtype=np.float32)
-        for _ in range(100):
-            self.step_env()
+        for attempt in range(1, self.MAX_INITIALIZATION_ATTEMPTS + 1):
+            # 每次候选场景都从干净动力学状态开始，但 seed 只设置一次以推进确定随机序列。
+            self.env.reset(step=False)
+            self.env.forward(q=q_zero,joint_names=self.joint_names,increase_tick=False)
+
+            obj_xyzs = sample_xyzs(
+                n_obj,
+                x_range   = [+0.24,+0.4],
+                y_range   = [-0.4,+0.2],
+                z_range   = [0.81,0.81],
+                min_dist  = 0.15,
+                xy_margin = 0.0
+            )
+            for obj_idx in range(n_obj):
+                self.env.set_p_base_body(body_name=obj_names[obj_idx],p=obj_xyzs[obj_idx,:])
+                self.env.set_R_base_body(body_name=obj_names[obj_idx],R=np.eye(3,3))
+            self.env.forward(increase_tick=False)
+
+            if self._has_mug_plate_contact():
+                reason = 'mug_plate_contact_before_settle'
+                self.last_reset_rejections[reason] = self.last_reset_rejections.get(reason, 0) + 1
+                continue
+
+            self.last_q = copy.deepcopy(q_zero)
+            self.q = np.concatenate([q_zero, np.array([0.0]*1)])
+            self.p0, self.R0 = self.env.get_pR_body(body_name='wrist_3_link')
+            mug_init_pose, plate_init_pose = self.get_obj_pose()
+            candidate_obj_init_pose = np.concatenate(
+                [mug_init_pose, plate_init_pose],
+                dtype=np.float32,
+            )
+            for _ in range(self.INITIALIZATION_SETTLE_STEPS):
+                self.step_env()
+
+            reason = self._settled_scene_error()
+            if reason:
+                self.last_reset_rejections[reason] = self.last_reset_rejections.get(reason, 0) + 1
+                continue
+
+            self.obj_init_pose = candidate_obj_init_pose
+            self.last_reset_attempts = attempt
+            break
+        else:
+            raise RuntimeError(
+                f'环境初始化失败: seed={seed}, '
+                f'已尝试 {self.MAX_INITIALIZATION_ATTEMPTS} 次, '
+                f'拒绝原因={self.last_reset_rejections}'
+            )
+
+        if self.last_reset_attempts > 1:
+            print(
+                f'INITIALIZATION RESAMPLED: seed={seed}, '
+                f'attempts={self.last_reset_attempts}, '
+                f'rejections={self.last_reset_rejections}'
+            )
         print("DONE INITIALIZATION")
         self.gripper_state = False
         self.past_chars = []

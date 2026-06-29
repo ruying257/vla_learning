@@ -57,9 +57,8 @@ Thumbs.db
 MUJOCO_LOG.TXT
 
 # 实验数据
-experiments/
-
-
+experiments/**/*
+!experiments/**/*.csv
 
 # for myself
 archive/

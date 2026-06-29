@@ -177,6 +177,22 @@ python deploy.py
 
 加载训练好的模型，在仿真环境中自主运行。
 
+如需对多个 temporal ensemble 系数做批量部署，使用 `scripts/run_te.py`。脚本默认使用 EGL headless 模式，不显示 MuJoCo 窗口，但仍会生成策略观测图像和部署视频。
+
+```bash
+# 默认 headless 运行实验矩阵
+python scripts/run_te.py
+
+# 显式指定 headless，只运行 TE_030
+python scripts/run_te.py --exp TE_030 --headless
+
+# 打开 MuJoCo 实时窗口
+python scripts/run_te.py --exp TE_030 --viewer
+
+# 只检查命令和环境变量
+python scripts/run_te.py --exp TE_030 --dry-run
+```
+
 如需批量比较 `ckpt/v5_finetune_replay` 中的四个微调阶段，使用专用评估脚本：
 
 ```bash
@@ -258,10 +274,10 @@ python scripts/rerun_finetune_replay_seeds.py \
 - Z 轴高度：0.81m（固定）
 - 物体间最小距离：0.15m
 
-`reset(seed=...)` 会先清空上一次 MuJoCo 仿真的速度、控制量和接触状态，
-因此同一 seed 会使用相同的杯盘采样坐标，并从相同动力学状态开始稳定。
-当前 0.15m 约束是物体中心距离，不是网格边界距离；为保持历史 seed 的坐标映射，
-本修正不会重采样已经发生网格接触的 seed。
+`reset(seed=...)` 会先清空上一次 MuJoCo 仿真的速度、控制量和接触状态。
+设置坐标后会按实际碰撞网格检查杯盘接触，并在100个稳定步后检查工作区边界。
+非法坐标会继续使用同一 seed 随机序列中的下一组候选值，因此重采样结果仍可复现。
+首组坐标合法的 seed 保持历史坐标；旧坐标已发生网格接触的 seed 会改用新坐标。
 
 ## 任务成功条件
 

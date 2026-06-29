@@ -168,6 +168,8 @@ def build_eval_metrics(
         "placement_z_threshold": PLACEMENT_Z_THRESHOLD,
         "initial_mug_position": initial_task_metrics.get("mug_position", []),
         "initial_plate_position": initial_task_metrics.get("plate_position", []),
+        "initialization_attempts": getattr(env, "last_reset_attempts", None),
+        "initialization_rejections": getattr(env, "last_reset_rejections", {}),
         "strict_success": final_task_metrics.get("strict_success", False),
         "placement_success": final_task_metrics.get("placement_success", False),
         "action_smoothness_mean": mean_or_none(action_deltas),
